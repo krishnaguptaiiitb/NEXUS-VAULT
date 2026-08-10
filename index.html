@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus Vault - Secure Cloud Storage</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+            line-height: 1.6;
+            color: #24292f;
+            background-color: #ffffff;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        h1, h2, h3 {
+            border-bottom: 1px solid #d0d7de;
+            padding-bottom: 0.3em;
+            margin-top: 24px;
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+        h1 { font-size: 2em; border-bottom: none; text-align: center; }
+        h2 { font-size: 1.5em; }
+        h3 { font-size: 1.25em; border-bottom: none; }
+        p { margin-top: 0; margin-bottom: 16px; }
+        .text-center { text-align: center; }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 16px;
+        }
+        table th, table td {
+            padding: 6px 13px;
+            border: 1px solid #d0d7de;
+        }
+        table tr:nth-child(2n) {
+            background-color: #f6f8fa;
+        }
+        pre {
+            background-color: #f6f8fa;
+            border-radius: 6px;
+            padding: 16px;
+            overflow: auto;
+            font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+            font-size: 85%;
+            line-height: 1.45;
+        }
+        code {
+            background-color: #f6f8fa;
+            padding: 0.2em 0.4em;
+            border-radius: 6px;
+            font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+            font-size: 85%;
+        }
+        pre code {
+            background-color: transparent;
+            padding: 0;
+        }
+        ul, ol {
+            padding-left: 2em;
+            margin-bottom: 16px;
+        }
+        hr {
+            height: 0.25em;
+            padding: 0;
+            margin: 24px 0;
+            background-color: #d0d7de;
+            border: 0;
+        }
+        .badges img {
+            margin: 0 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="text-center">
+        <h1>🔐 Nexus Vault</h1>
+        
+        <p class="badges">
+            <img src="https://img.shields.io/badge/SECURE-CLOUD%20STORAGE-2563EB?style=for-the-badge" alt="Secure Cloud Storage" />
+            <img src="https://img.shields.io/badge/AES-ENCRYPTION-16A34A?style=for-the-badge" alt="AES Encryption" />
+            <img src="https://img.shields.io/badge/RSA-KEY%20PROTECTION-7C3AED?style=for-the-badge" alt="RSA Key Protection" />
+            <img src="https://img.shields.io/badge/React-FRONTEND-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React Frontend" />
+            <img src="https://img.shields.io/badge/Node.js-BACKEND-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js Backend" />
+            <img src="https://img.shields.io/badge/MongoDB-DATABASE-47A248?style=for-the-badge&logo=mongodb&logoColor=white" alt="MongoDB Database" />
+        </p>
+
+        <p><strong>Client-Side Encrypted Cloud Storage with Secure File Sharing & Access Revocation</strong></p>
+        <p>A full-stack cloud security application that encrypts files before storage and provides controlled, cryptographically protected file sharing.</p>
+    </div>
+
+    <h2>🌐 Overview</h2>
+    <p>Nexus Vault is a secure cloud storage platform designed to address confidentiality and access-control challenges associated with storing sensitive files on cloud infrastructure.</p>
+    <p>The core principle is: <strong>Encrypt the data before it reaches the storage server.</strong></p>
+    <p>Nexus Vault uses a hybrid cryptographic architecture in which AES is used for efficient file encryption while RSA is used to protect the corresponding encryption key. The platform combines cryptographic protection with authenticated access, secure file sharing, and access revocation.</p>
+
+    <h2>🎯 Project Objectives</h2>
+    <ul>
+        <li>🔐 <strong>Protect files</strong> before they are stored on the server.</li>
+        <li>🔑 Implement secure <strong>cryptographic key management</strong>.</li>
+        <li>📁 Provide <strong>authenticated cloud file storage</strong>.</li>
+        <li>🤝 Enable <strong>secure file sharing</strong> between registered users.</li>
+        <li>🚫 Provide <strong>access revocation</strong> for shared files.</li>
+        <li>👤 Prevent unauthorized access through <strong>authentication and authorization</strong>.</li>
+        <li>🧩 Demonstrate practical application of <strong>hybrid cryptography</strong>.</li>
+        <li>☁️ Provide a foundation for <strong>future cloud deployment</strong>.</li>
+    </ul>
+
+    <h2>✨ Key Features</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Feature</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>🔐 Client-Side Encryption</td><td>Files are encrypted before being uploaded to the backend.</td></tr>
+            <tr><td>🔑 Hybrid Cryptography</td><td>AES protects file data while RSA protects encryption keys.</td></tr>
+            <tr><td>👤 User Authentication</td><td>JWT-based authentication protects application resources.</td></tr>
+            <tr><td>🔒 Password Security</td><td>Passwords are hashed using bcrypt before storage.</td></tr>
+            <tr><td>📤 Secure Upload</td><td>Users can upload files through authenticated APIs.</td></tr>
+            <tr><td>📥 Secure Decryption</td><td>Authorized users can recover and decrypt their files.</td></tr>
+            <tr><td>🤝 File Sharing</td><td>Encrypted files can be shared with registered users.</td></tr>
+            <tr><td>🚫 Access Revocation</td><td>Owners can revoke previously granted application-level access.</td></tr>
+            <tr><td>🗑️ File Management</td><td>Users can view and delete their stored files.</td></tr>
+            <tr><td>🗄️ MongoDB Storage</td><td>User, file, and access metadata are maintained in MongoDB.</td></tr>
+        </tbody>
+    </table>
+
+    <h2>🧠 Hybrid Encryption Model</h2>
+    
+    <h3>AES</h3>
+    <p>AES encrypts the actual file because symmetric encryption is efficient for large amounts of data.</p>
+<pre><code>Original File
+     │
+     ▼
+┌─────────────┐
+│ AES Encrypt │
+└──────┬──────┘
+       │
+       ▼
+Encrypted File</code></pre>
+
+    <h3>RSA</h3>
+    <p>RSA protects the AES encryption key.</p>
+<pre><code>AES Key
+   │
+   ▼
+┌──────────────┐
+│ RSA Public   │
+│ Key Protect  │
+└──────┬───────┘
+       │
+       ▼
+Encrypted AES Key</code></pre>
+
+    <h3>Complete Model</h3>
+<pre><code>                         ORIGINAL FILE
+                              │
+                              ▼
+                       ┌─────────────┐
+                       │ AES Encrypt │
+                       └──────┬──────┘
+                              │
+                              ▼
+                       ENCRYPTED FILE
+
+             AES ENCRYPTION KEY
+                      │
+                      ▼
+                ┌─────────────┐
+                │ RSA Protect │
+                │ with Public │
+                │ Key         │
+                └──────┬──────┘
+                       │
+                       ▼
+                ENCRYPTED AES KEY</code></pre>
+
+    <h2>🏗️ System Architecture</h2>
+<pre><code>                         ┌─────────────────────┐
+                         │        USER         │
+                         │      BROWSER        │
+                         └──────────┬──────────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │   REACT FRONTEND   │
+                         │                     │
+                         │ • Authentication    │
+                         │ • File Management   │
+                         │ • Encryption        │
+                         │ • Decryption        │
+                         │ • Sharing           │
+                         │ • Revocation        │
+                         └──────────┬──────────┘
+                                    │
+                              REST API / HTTP
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │ NODE.JS + EXPRESS   │
+                         │                     │
+                         │ • Authentication    │
+                         │ • Authorization     │
+                         │ • File Operations   │
+                         │ • Sharing Logic     │
+                         │ • Database Access   │
+                         └──────────┬──────────┘
+                                    │
+                         ┌──────────┴──────────┐
+                         │                     │
+                         ▼                     ▼
+                ┌─────────────────┐   ┌─────────────────┐
+                │     MongoDB     │   │  File Storage   │
+                │                 │   │                 │
+                │ • Users         │   │ • Encrypted     │
+                │ • Public Keys   │   │   Files         │
+                │ • File Metadata │   │                 │
+                │ • Access Data   │   │                 │
+                └─────────────────┘   └─────────────────┘</code></pre>
+
+    <h2>🔄 Application Workflow</h2>
+    
+    <h3>1. User Registration</h3>
+    <p>The browser generates an RSA key pair. The public key is associated with the user's account. The private key remains on the user's side and can be backed up.</p>
+<pre><code>RSA KEY PAIR
+     │
+ ┌───┴────────┐
+ ▼            ▼
+Public Key  Private Key
+ │            │
+ ▼            ▼
+Server     User Side</code></pre>
+
+    <h3>2. Authentication</h3>
+<pre><code>Email + Password
+       │
+       ▼
+Backend Verification
+       │
+       ▼
+bcrypt Password Check
+       │
+       ▼
+JWT Generation
+       │
+       ▼
+Authenticated Requests</code></pre>
+
+    <h3>3. File Upload</h3>
+<pre><code>SELECT FILE
+    │
+    ▼
+Generate AES Key
+    │
+    ▼
+AES File Encryption
+    │
+ ┌──┴──────────────┐
+ ▼                 ▼
+Encrypted File   AES Key
+                    │
+                    ▼
+               RSA Protection
+                    │
+                    ▼
+               Encrypted AES Key
+                    │
+                    ▼
+              Backend Storage</code></pre>
+
+    <h3>4. File Decryption</h3>
+<pre><code>Encrypted File + Encrypted AES Key
+              │
+              ▼
+        User Private Key
+              │
+              ▼
+         Recover AES Key
+              │
+              ▼
+          AES Decryption
+              │
+              ▼
+         Original File</code></pre>
+
+    <h2>🤝 Secure File Sharing</h2>
+    <p>Nexus Vault allows a file owner to share an encrypted file with another registered user. The encrypted file remains stored in its protected form.</p>
+<pre><code>FILE OWNER
+    │
+    ▼
+Enter Recipient Email
+    │
+    ▼
+Retrieve Recipient Public Key
+    │
+    ▼
+Protect AES Key for Recipient
+    │
+    ▼
+Create Recipient Access Entry
+    │
+    ▼
+RECIPIENT
+    │
+    ▼
+Private Key
+    │
+    ▼
+Recover AES Key
+    │
+    ▼
+Decrypt File</code></pre>
+
+    <h2>🚫 Access Revocation</h2>
+    <p>The owner can revoke application-level access previously granted to another user. <strong>Important:</strong> Revocation prevents future access through the application. It cannot remove a plaintext copy that a recipient has already downloaded.</p>
+<pre><code>FILE OWNER
+    │
+    ▼
+Select Shared User
+    │
+    ▼
+Revoke Access
+    │
+    ▼
+Remove Access / Key Entry
+    │
+    ▼
+Future Application Access Denied</code></pre>
+
+    <h2>🛡️ Security Architecture</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Security Layer</th>
+                <th>Implementation</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>Authentication</td><td>JWT</td></tr>
+            <tr><td>Password Protection</td><td>bcryptjs</td></tr>
+            <tr><td>File Encryption</td><td>AES</td></tr>
+            <tr><td>Key Protection</td><td>RSA</td></tr>
+            <tr><td>Client Cryptography</td><td>Web Crypto API</td></tr>
+            <tr><td>API Protection</td><td>Authentication Middleware</td></tr>
+            <tr><td>Sharing Protection</td><td>Recipient Public Key</td></tr>
+            <tr><td>Access Control</td><td>Authenticated Users</td></tr>
+            <tr><td>Revocation</td><td>Removal of Recipient Access</td></tr>
+        </tbody>
+    </table>
+
+    <h2>🔐 Key Management</h2>
+    <p>Each registered user has an RSA public/private key pair.</p>
+<pre><code>                    RSA KEY PAIR
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+              ▼                     ▼
+         PUBLIC KEY             PRIVATE KEY
+              │                     │
+              ▼                     ▼
+       Protect AES Key          Recover AES Key
+              │                     │
+              └──────────┬──────────┘
+                         ▼
+                      AES KEY
+                         │
+                         ▼
+                    FILE ACCESS</code></pre>
+
+    <h2>🧩 Technology Stack</h2>
+    <div style="display: flex; flex-wrap: wrap; gap: 2rem;">
+        <div>
+            <h3>Frontend</h3>
+            <ul>
+                <li>React.js</li>
+                <li>JavaScript</li>
+                <li>CSS</li>
+                <li>Axios</li>
+                <li>Web Crypto API</li>
+            </ul>
+        </div>
+        <div>
+            <h3>Backend</h3>
+            <ul>
+                <li>Node.js</li>
+                <li>Express.js</li>
+                <li>JWT</li>
+                <li>bcryptjs</li>
+                <li>Multer</li>
+            </ul>
+        </div>
+        <div>
+            <h3>Database & Cryptography</h3>
+            <ul>
+                <li>MongoDB / Mongoose</li>
+                <li>AES / RSA</li>
+            </ul>
+        </div>
+        <div>
+            <h3>Development</h3>
+            <ul>
+                <li>Git / GitHub</li>
+                <li>VS Code</li>
+                <li>Nodemon</li>
+            </ul>
+        </div>
+    </div>
+
+    <h2>📁 Project Structure</h2>
+<pre><code>cloud-security-project/
+│
+├── frontend/
+│   ├── public/
+│   └── src/
+│       ├── components/
+│       ├── pages/
+│       ├── services/
+│       ├── App.js
+│       ├── App.css
+│       ├── dashboard.css
+│       └── index.css
+│
+├── src/
+│   ├── config/
+│   │   └── db.js
+│   ├── controllers/
+│   │   ├── fileController.js
+│   │   └── userController.js
+│   ├── middleware/
+│   │   └── authMiddleware.js
+│   ├── models/
+│   │   ├── fileModel.js
+│   │   └── userModel.js
+│   ├── routes/
+│   │   ├── fileRoutes.js
+│   │   └── userRoutes.js
+│   ├── utils/
+│   │   └── upload.js
+│   └── app.js
+│
+├── uploads/
+├── .env
+├── package.json
+├── package-lock.json
+└── .gitignore</code></pre>
+
+    <h2>🚀 Installation</h2>
+    
+    <h3>Prerequisites</h3>
+    <ul>
+        <li>Node.js & npm</li>
+        <li>MongoDB / MongoDB Atlas</li>
+        <li>Git</li>
+    </ul>
+
+    <h3>Clone the Repository</h3>
+<pre><code>git clone https://github.com/YOUR_USERNAME/nexus-vault.git
+cd nexus-vault</code></pre>
+
+    <h3>Backend Setup</h3>
+<pre><code>npm install</code></pre>
+    <p>Create a <code>.env</code> file in the root directory:</p>
+<pre><code>PORT=5000
+MONGO_URI=your_mongodb_connection_string
+JWT_SECRET=your_secret_key</code></pre>
+    <p>Start the backend server:</p>
+<pre><code>npm run dev</code></pre>
+    <p><em>Backend runs on: http://localhost:5000</em></p>
+
+    <h3>Frontend Setup</h3>
+    <p>Open another terminal:</p>
+<pre><code>cd frontend
+npm install
+npm start</code></pre>
+    <p><em>Frontend runs on: http://localhost:3000</em></p>
+
+    <h2>🧪 Functional Testing</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Test</th>
+                <th>Expected Result</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>User Registration</td><td>Account created</td></tr>
+            <tr><td>Duplicate Registration</td><td>Request rejected</td></tr>
+            <tr><td>Valid Login</td><td>JWT issued</td></tr>
+            <tr><td>Invalid Login</td><td>Authentication rejected</td></tr>
+            <tr><td>File Upload</td><td>File stored</td></tr>
+            <tr><td>File Encryption</td><td>Encrypted representation generated</td></tr>
+            <tr><td>File Decryption</td><td>Original file recovered</td></tr>
+            <tr><td>File Sharing</td><td>Recipient access created</td></tr>
+            <tr><td>Invalid Recipient</td><td>Sharing rejected</td></tr>
+            <tr><td>Access Revocation</td><td>Recipient access removed</td></tr>
+            <tr><td>Unauthorized Request</td><td>Request rejected</td></tr>
+            <tr><td>File Deletion</td><td>File removed</td></tr>
+        </tbody>
+    </table>
+
+    <h2>⚠️ Current Limitations</h2>
+    <p>Nexus Vault is an academic/project implementation and should undergo additional hardening before production deployment.</p>
+    <ul>
+        <li>Private-key protection relies on client-side handling.</li>
+        <li>Loss of the private key can prevent file recovery.</li>
+        <li>Production deployment requires HTTPS.</li>
+        <li>Production systems require secure secret management.</li>
+        <li>Revocation cannot invalidate files already downloaded by a recipient.</li>
+        <li>Large-scale cloud storage requires dedicated object-storage infrastructure.</li>
+    </ul>
+
+    <h2>🔮 Future Work</h2>
+    <ul>
+        <li>☁️ Cloud object storage deployment</li>
+        <li>🔒 HTTPS production deployment</li>
+        <li>🔑 Stronger private-key storage & Cryptographic key rotation</li>
+        <li>🧾 Audit logging & 👥 Fine-grained access control</li>
+        <li>📱 Multi-factor authentication</li>
+        <li>📦 Chunked encryption for large files</li>
+        <li>⚡ Performance optimization & 📈 Cloud scalability improvements</li>
+        <li>🛡️ Hardware-backed key protection & 🔍 Automated security testing</li>
+    </ul>
+
+    <h2>📸 Screenshots</h2>
+    <p><em>(Ensure screenshots are added to the <code>screenshots/</code> directory)</em></p>
+    <table>
+        <tr>
+            <td class="text-center"><strong>Authentication</strong><br><img src="screenshots/login.png" alt="Login Screen" width="300"></td>
+            <td class="text-center"><strong>Dashboard</strong><br><img src="screenshots/dashboard.png" alt="Dashboard" width="300"></td>
+        </tr>
+        <tr>
+            <td class="text-center"><strong>Secure Upload</strong><br><img src="screenshots/upload.png" alt="Upload Screen" width="300"></td>
+            <td class="text-center"><strong>Sharing & Revocation</strong><br><img src="screenshots/sharing.png" alt="Sharing Menu" width="300"></td>
+        </tr>
+    </table>
+
+    <hr>
+
+    <h2>🎓 Academic Project</h2>
+    <p><strong>Nexus Vault — Secure Cloud Storage using Hybrid Cryptography</strong><br>
+    <em>Domain: Cloud Security & Applied Cryptography</em><br>
+    The project demonstrates the practical integration of cryptographic algorithms, secure authentication, encrypted file storage, controlled file sharing, and access revocation into a full-stack web application.</p>
+
+    <h2>👨‍💻 Author</h2>
+    <p>
+        <strong>Krishna Gupta</strong><br>
+        B.Tech Computer Science<br>
+        Indian Institute of Information Technology, Bhopal
+    </p>
+
+    <div class="text-center" style="margin-top: 40px; padding: 20px; background-color: #f6f8fa; border-radius: 8px;">
+        <h3>🔐 Nexus Vault</h3>
+        <p><strong>Encrypt first. Store securely. Share selectively.</strong></p>
+        <p>⭐ <em>If you found this project useful, consider starring the repository.</em></p>
+    </div>
+
+</body>
+</html>
