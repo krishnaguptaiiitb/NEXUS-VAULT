@@ -1,24 +1,120 @@
-import { useEffect, useState } from "react";
+
+import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
+import socket from "../socket";
 import {
+  FaShieldAlt,
   FaFileAlt,
+  FaFilePdf,
+  FaFileImage,
+  FaFileWord,
+  FaFileExcel,
+  FaFileArchive,
+  FaFileCode,
   FaLock,
   FaDownload,
   FaCloudUploadAlt,
-  FaShieldAlt,
   FaShare,
-  FaTrash
+  FaTrash,
+  FaSearch,
+  FaFolderOpen,
+  FaUsers,
+  FaSignOutAlt,
+  FaKey,
+  FaCheckCircle,
+  FaPlus,
+  FaTimes,
+  FaBars,
+  FaHome,
+  FaSortAmountDown,
+  FaCalendarAlt
 } from "react-icons/fa";
+import "./Dashboard.css";
+
+const API_URL = "http://localhost:5000";
+
+function getId(value) {
+  if (!value) return "";
+  return String(value._id || value);
+}
+
+function getFileDate(fileId) {
+  try {
+    if (!/^[a-fA-F0-9]{24}$/.test(fileId)) return null;
+    return new Date(parseInt(fileId.substring(0, 8), 16) * 1000);
+  } catch {
+    return null;
+  }
+}
+
+function formatDate(date) {
+  if (!date || Number.isNaN(date.getTime())) return "Date unavailable";
+
+  return date.toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+function getFileType(filename = "") {
+  const extension = filename.split(".").pop().toLowerCase();
+
+  if (extension === "pdf") {
+    return { label: "PDF document", Icon: FaFilePdf, className: "type-pdf" };
+  }
+
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(extension)) {
+    return { label: "Image", Icon: FaFileImage, className: "type-image" };
+  }
+
+  if (["doc", "docx", "txt", "rtf", "odt"].includes(extension)) {
+    return { label: "Document", Icon: FaFileWord, className: "type-document" };
+  }
+
+  if (["xls", "xlsx", "csv"].includes(extension)) {
+    return { label: "Spreadsheet", Icon: FaFileExcel, className: "type-spreadsheet" };
+  }
+
+  if (["zip", "rar", "7z", "tar", "gz"].includes(extension)) {
+    return { label: "Archive", Icon: FaFileArchive, className: "type-archive" };
+  }
+
+  if (["js", "jsx", "ts", "tsx", "html", "css", "json", "py", "java", "cpp"].includes(extension)) {
+    return { label: "Code file", Icon: FaFileCode, className: "type-code" };
+  }
+
+  return { label: "File", Icon: FaFileAlt, className: "type-default" };
+}
+
+function formatFileSize(bytes) {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
+    return null;
+  }
+
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 
 function Dashboard() {
   const [file, setFile] = useState(null);
   const [files, setFiles] = useState([]);
   const [privateKeyFile, setPrivateKeyFile] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeView, setActiveView] = useState("all");
+  const [sortBy, setSortBy] = useState("newest");
+  const [uploading, setUploading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loadingFiles, setLoadingFiles] = useState(true);
 
   const token = localStorage.getItem("token");
   const currentUserId = localStorage.getItem("userId");
 
-  // 🔐 SAFE BASE64 CONVERSION
   const bufferToBase64 = (buffer) => {
     let binary = "";
     const bytes = new Uint8Array(buffer);
@@ -31,49 +127,80 @@ function Dashboard() {
     return btoa(binary);
   };
 
-  // 🔐 GET PRIVATE KEY FROM FILE
+  // PRIVATE KEY
   const getPrivateKey = async () => {
     if (!privateKeyFile) {
-      throw new Error("Upload private key first");
+      throw new Error("Upload your private key first.");
     }
 
-    const keyText = await privateKeyFile.text();
+    const keyText = (await privateKeyFile.text()).trim();
+
+    if (!keyText) {
+      throw new Error("The selected private key file is empty.");
+    }
 
     return await window.crypto.subtle.importKey(
       "pkcs8",
-      Uint8Array.from(atob(keyText), c => c.charCodeAt(0)),
+      Uint8Array.from(atob(keyText), (c) => c.charCodeAt(0)),
       { name: "RSA-OAEP", hash: "SHA-256" },
       false,
       ["decrypt"]
     );
   };
 
-  // 🗑️ DELETE FILE
-  const deleteFile = async (id) => {
-    if (!window.confirm("Are you sure you want to permanently delete this file?")) return;
-
+  // FETCH FILES
+  const fetchFiles = async () => {
     try {
-      await axios.delete(`http://localhost:5000/api/files/${id}`, {
+      const res = await axios.get(`${API_URL}/api/files`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      alert("File deleted successfully 🗑️");
-      
-      // 🔥 instant UI update (removes the file from the screen without reloading)
-      setFiles(prev => prev.filter(f => f._id !== id));
-
+      setFiles(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
-      console.error(err);
-      alert(err.response?.data?.message || "Delete failed");
+      console.error("Fetch files error:", err);
+      alert(err.response?.data?.message || "Unable to load your files.");
+    } finally {
+      setLoadingFiles(false);
     }
   };
-  // 🔐 ENCRYPT FILE (AES)
-// 🔐 ENCRYPT FILE (AES)
-  const encryptFile = async (file) => {
-    const buffer = await file.arrayBuffer();
 
-    // 👉 1. ADD THIS LINE STARTING THE TIMER
-    const startTime = performance.now(); 
+  useEffect(() => {
+    fetchFiles();
+    // Initial fetch when the Dashboard mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // REAL-TIME FILE SHARING AND ACCESS REVOCATION
+  useEffect(() => {
+    const handleAccessGranted = ({ message } = {}) => {
+      fetchFiles();
+      alert(message || "A new file has been shared with you.");
+    };
+
+    const handleAccessRevoked = ({ fileId, message } = {}) => {
+      if (!fileId) return;
+
+      setFiles((prevFiles) =>
+        prevFiles.filter((f) => String(f._id) !== String(fileId))
+      );
+
+      alert(message || "Access to this file has been revoked.");
+    };
+
+    socket.on("file-access-granted", handleAccessGranted);
+    socket.on("file-access-revoked", handleAccessRevoked);
+
+    return () => {
+      socket.off("file-access-granted", handleAccessGranted);
+      socket.off("file-access-revoked", handleAccessRevoked);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ENCRYPT FILE
+  const encryptFile = async (selectedFile) => {
+    const buffer = await selectedFile.arrayBuffer();
+    const startTime = performance.now();
 
     const key = await window.crypto.subtle.generateKey(
       { name: "AES-CBC", length: 256 },
@@ -89,9 +216,11 @@ function Dashboard() {
       buffer
     );
 
-    // 👉 2. ADD THESE TWO LINES TO STOP TIMER AND PRINT RESULT
     const endTime = performance.now();
-    console.log(`[ENCRYPT] Size: ${(file.size / 1000000).toFixed(2)} MB | Time: ${(endTime - startTime).toFixed(2)} ms`);
+
+    console.log(
+      `[ENCRYPT] Size: ${(selectedFile.size / 1000000).toFixed(2)} MB | Time: ${(endTime - startTime).toFixed(2)} ms`
+    );
 
     const rawKey = await window.crypto.subtle.exportKey("raw", key);
 
@@ -102,18 +231,26 @@ function Dashboard() {
     };
   };
 
-  // 🚀 UPLOAD
+  // UPLOAD FILE
   const uploadFile = async () => {
-    if (!file) return alert("Select a file first.");
+    if (!file) {
+      alert("Select a file first.");
+      return;
+    }
 
     try {
-      const { encryptedBlob, rawKey, iv } = await encryptFile(file);
+      setUploading(true);
 
+      const { encryptedBlob, rawKey, iv } = await encryptFile(file);
       const publicKeyBase64 = localStorage.getItem("publicKey");
+
+      if (!publicKeyBase64) {
+        throw new Error("Public key not found. Please log in again.");
+      }
 
       const publicKey = await window.crypto.subtle.importKey(
         "spki",
-        Uint8Array.from(atob(publicKeyBase64), c => c.charCodeAt(0)),
+        Uint8Array.from(atob(publicKeyBase64), (c) => c.charCodeAt(0)),
         { name: "RSA-OAEP", hash: "SHA-256" },
         false,
         ["encrypt"]
@@ -132,41 +269,40 @@ function Dashboard() {
       formData.append("encryptedKey", encryptedKey);
       formData.append("iv", iv);
 
-      await axios.post("http://localhost:5000/api/files/upload", formData, {
-        headers: { Authorization: `Bearer ${token}` },
+      await axios.post(`${API_URL}/api/files/upload`, formData, {
+        headers: { Authorization: `Bearer ${token}` }
       });
 
-      alert("Uploaded securely 🔐");
-      fetchFiles();
+      alert("File uploaded securely.");
+      setFile(null);
 
+      const input = document.getElementById("vault-file-input");
+      if (input) input.value = "";
+
+      await fetchFiles();
     } catch (err) {
-      console.error(err);
-      alert("Upload failed");
+      console.error("Upload error:", err);
+      alert(err.response?.data?.message || err.message || "Upload failed.");
+    } finally {
+      setUploading(false);
     }
   };
 
-  // 📥 FETCH FILES
-  const fetchFiles = async () => {
-    const res = await axios.get("http://localhost:5000/api/files", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    setFiles(res.data);
-  };
-
-  // 🔓 DOWNLOAD & DECRYPT
-// 🔓 DOWNLOAD & DECRYPT
+  // DOWNLOAD AND DECRYPT
   const downloadFile = async (id) => {
     try {
       const res = await axios.get(
-        `http://localhost:5000/api/files/download/${id}`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        `${API_URL}/api/files/download/${id}`,
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
       );
 
       const { encryptedData, encryptedKey, iv, filename } = res.data;
 
       const encryptedBuffer = Uint8Array.from(
         atob(encryptedData),
-        c => c.charCodeAt(0)
+        (c) => c.charCodeAt(0)
       );
 
       const privateKey = await getPrivateKey();
@@ -174,7 +310,7 @@ function Dashboard() {
       const decryptedKeyBuffer = await window.crypto.subtle.decrypt(
         { name: "RSA-OAEP" },
         privateKey,
-        Uint8Array.from(atob(encryptedKey), c => c.charCodeAt(0))
+        Uint8Array.from(atob(encryptedKey), (c) => c.charCodeAt(0))
       );
 
       const aesKey = await window.crypto.subtle.importKey(
@@ -185,72 +321,80 @@ function Dashboard() {
         ["decrypt"]
       );
 
-      // 👉 3. ADD THIS LINE STARTING THE TIMER
       const startTime = performance.now();
 
       const decrypted = await window.crypto.subtle.decrypt(
         {
           name: "AES-CBC",
-          iv: Uint8Array.from(atob(iv), c => c.charCodeAt(0))
+          iv: Uint8Array.from(atob(iv), (c) => c.charCodeAt(0))
         },
         aesKey,
         encryptedBuffer
       );
 
-      // 👉 4. ADD THESE TWO LINES TO STOP TIMER AND PRINT RESULT
       const endTime = performance.now();
-      console.log(`[DECRYPT] File: ${filename} | Time: ${(endTime - startTime).toFixed(2)} ms`);
+
+      console.log(
+        `[DECRYPT] File: ${filename} | Time: ${(endTime - startTime).toFixed(2)} ms`
+      );
 
       const blob = new Blob([decrypted]);
       const url = URL.createObjectURL(blob);
-
       const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      link.click();
 
+      link.href = url;
+      link.download = filename || "download";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err) {
-      console.error(err);
-      alert("Decryption failed");
+      console.error("Download/decryption error:", err);
+      alert(err.message || "Decryption failed.");
     }
   };
 
-  // 🔁 SHARE FILE
+  // SHARE FILE
   const shareFile = async (fileId) => {
-    const email = prompt("Enter email to share with:");
-    if (!email) return;
+    const email = window.prompt("Enter the email address to share with:");
+    if (!email || !email.trim()) return;
 
     if (!privateKeyFile) {
-      return alert("Upload your private key first!");
+      alert("Upload your private key first.");
+      return;
     }
 
     try {
       const userRes = await axios.post(
-        "http://localhost:5000/api/users/get-by-email",
-        { email },
+        `${API_URL}/api/users/get-by-email`,
+        { email: email.trim() },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
       const receiver = userRes.data;
 
+      if (!receiver?.publicKey || !receiver?._id) {
+        throw new Error("The recipient does not have a valid public key.");
+      }
+
       const keyRes = await axios.get(
-        `http://localhost:5000/api/files/get-key/${fileId}`,
+        `${API_URL}/api/files/get-key/${fileId}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
       const { encryptedKey } = keyRes.data;
-
       const privateKey = await getPrivateKey();
 
       const decryptedKeyBuffer = await window.crypto.subtle.decrypt(
         { name: "RSA-OAEP" },
         privateKey,
-        Uint8Array.from(atob(encryptedKey), c => c.charCodeAt(0))
+        Uint8Array.from(atob(encryptedKey), (c) => c.charCodeAt(0))
       );
 
       const receiverPublicKey = await window.crypto.subtle.importKey(
         "spki",
-        Uint8Array.from(atob(receiver.publicKey), c => c.charCodeAt(0)),
+        Uint8Array.from(atob(receiver.publicKey), (c) => c.charCodeAt(0)),
         { name: "RSA-OAEP", hash: "SHA-256" },
         false,
         ["encrypt"]
@@ -265,7 +409,7 @@ function Dashboard() {
       const newEncryptedKey = bufferToBase64(newEncryptedKeyBuffer);
 
       await axios.post(
-        "http://localhost:5000/api/files/share",
+        `${API_URL}/api/files/share`,
         {
           fileId,
           encryptedKey: newEncryptedKey,
@@ -274,244 +418,664 @@ function Dashboard() {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      alert("File shared securely 🔐");
-      fetchFiles();
-
+      alert("File shared successfully.");
+      await fetchFiles();
     } catch (error) {
-      console.error(error);
-      alert(error.response?.data?.message || "Sharing failed");
+      console.error("Share error:", error);
+      alert(error.response?.data?.message || error.message || "Sharing failed.");
     }
   };
 
-  // ❌ REVOKE
-const revokeAccess = async (fileId, userId) => {
-  if (!window.confirm("Revoke access?")) return;
+  // REVOKE ACCESS
+  const revokeAccess = async (fileId, userId) => {
+    if (!userId) {
+      alert("Unable to identify this shared user.");
+      return;
+    }
 
-  try {
-    const res = await axios.post(
-      "http://localhost:5000/api/files/revoke",
-      { fileId, userId },
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+    if (!window.confirm("Are you sure you want to revoke this user's access?")) {
+      return;
+    }
 
-    alert(res.data.message || "Access revoked");
+    try {
+      const res = await axios.post(
+        `${API_URL}/api/files/revoke`,
+        { fileId, userId },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
 
-    // 🔥 instant UI update (no reload lag)
-    setFiles(prev =>
-      prev.map(file =>
-        file._id === fileId
-          ? {
-              ...file,
-              encryptedKeys: file.encryptedKeys.filter(
-                k => k.user._id !== userId
-              )
-            }
-          : file
-      )
-    );
+      alert(res.data.message || "Access revoked.");
 
-  } catch (err) {
-    console.error(err);
-    alert("Revoke failed");
-  }
-};
+      await fetchFiles();
+    } catch (err) {
+      console.error("Revoke error:", err);
+      alert(err.response?.data?.message || "Revoke failed.");
+    }
+  };
 
+  // DELETE FILE
+  const deleteFile = async (id) => {
+    if (!window.confirm("Are you sure you want to permanently delete this file?")) {
+      return;
+    }
+
+    try {
+      await axios.delete(`${API_URL}/api/files/${id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      alert("File deleted successfully.");
+      setFiles((prev) => prev.filter((f) => f._id !== id));
+    } catch (err) {
+      console.error("Delete error:", err);
+      alert(err.response?.data?.message || "Delete failed.");
+    }
+  };
+
+  // LOGOUT
   const logout = () => {
-    localStorage.clear();
+    localStorage.removeItem("token");
+    localStorage.removeItem("userId");
+    localStorage.removeItem("publicKey");
+    localStorage.removeItem("privateKey");
     window.location.reload();
   };
 
-  useEffect(() => {
-    fetchFiles();
-  }, []);
+  // FILE FILTERING
+  const ownedFiles = useMemo(
+    () => files.filter((f) => getId(f.owner) === currentUserId),
+    [files, currentUserId]
+  );
+
+  const sharedFiles = useMemo(
+    () => files.filter((f) => getId(f.owner) !== currentUserId),
+    [files, currentUserId]
+  );
+
+  const displayedFiles = useMemo(() => {
+    let result = files;
+
+    if (activeView === "owned") result = ownedFiles;
+    if (activeView === "shared") result = sharedFiles;
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.trim().toLowerCase();
+
+      result = result.filter((f) =>
+        f.filename?.toLowerCase().includes(query)
+      );
+    }
+
+    const sorted = [...result];
+
+    sorted.sort((a, b) => {
+      const nameA = (a.filename || "").toLowerCase();
+      const nameB = (b.filename || "").toLowerCase();
+      const dateA = getFileDate(a._id)?.getTime() || 0;
+      const dateB = getFileDate(b._id)?.getTime() || 0;
+
+      if (sortBy === "oldest") return dateA - dateB;
+      if (sortBy === "name-asc") return nameA.localeCompare(nameB);
+      if (sortBy === "name-desc") return nameB.localeCompare(nameA);
+
+      return dateB - dateA;
+    });
+
+    return sorted;
+  }, [files, ownedFiles, sharedFiles, activeView, searchQuery, sortBy]);
+
+  const viewTitle =
+    activeView === "shared"
+      ? "Shared with me"
+      : activeView === "owned"
+        ? "My files"
+        : "All files";
+
+  const totalSharedRecipients = ownedFiles.reduce((total, f) => {
+    const ownerId = getId(f.owner);
+
+    const recipients = f.encryptedKeys?.filter(
+      (k) => getId(k.user) !== ownerId
+    ) || [];
+
+    return total + recipients.length;
+  }, 0);
 
   return (
-    <>
-      <div className="bg-orbs">
-        <div className="orb orb-1"></div>
-        <div className="orb orb-2"></div>
-        <div className="orb orb-3"></div>
-      </div>
+    <div className="vault-app">
+      {sidebarOpen && (
+        <div
+          className="sidebar-overlay"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
 
-      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "40px 20px" }}>
-
-        {/* HEADER */}
-        <header style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 40
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <FaShieldAlt size={26} />
-            <h1 style={{ margin: 0, fontSize: "1.6rem", fontWeight: 600 }}>
-              Nexus Vault
-            </h1>
+      {/* SIDEBAR */}
+      <aside className={`vault-sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+        <div className="brand-area">
+          <div className="brand-icon">
+            <FaShieldAlt />
           </div>
 
-          <button className="btn-premium secondary" onClick={logout}>
-            Disconnect
+          <div>
+            <h2>Nexus Vault</h2>
+            <span>SECURE CLOUD STORAGE</span>
+          </div>
+
+          <button
+            className="mobile-close"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close menu"
+          >
+            <FaTimes />
           </button>
+        </div>
+
+        <div className="sidebar-section">
+          <span className="sidebar-label">WORKSPACE</span>
+
+          <button
+            className={`nav-item ${activeView === "all" ? "active" : ""}`}
+            onClick={() => {
+              setActiveView("all");
+              setSidebarOpen(false);
+            }}
+          >
+            <FaHome />
+            <span>Overview</span>
+          </button>
+
+          <button
+            className={`nav-item ${activeView === "owned" ? "active" : ""}`}
+            onClick={() => {
+              setActiveView("owned");
+              setSidebarOpen(false);
+            }}
+          >
+            <FaFolderOpen />
+            <span>My files</span>
+            <span className="nav-count">{ownedFiles.length}</span>
+          </button>
+
+          <button
+            className={`nav-item ${activeView === "shared" ? "active" : ""}`}
+            onClick={() => {
+              setActiveView("shared");
+              setSidebarOpen(false);
+            }}
+          >
+            <FaUsers />
+            <span>Shared with me</span>
+            <span className="nav-count">{sharedFiles.length}</span>
+          </button>
+        </div>
+
+        <div className="sidebar-security">
+          <div className="security-icon">
+            <FaLock />
+          </div>
+
+          <div>
+            <strong>Your files are encrypted</strong>
+            <p>Encryption happens before upload.</p>
+          </div>
+        </div>
+
+        <div className="sidebar-bottom">
+          <div className="sidebar-user">
+            <div className="user-avatar">
+              <FaShieldAlt />
+            </div>
+
+            <div className="user-details">
+              <strong>My Account</strong>
+              <span>Personal workspace</span>
+            </div>
+          </div>
+
+          <button className="logout-button" onClick={logout}>
+            <FaSignOutAlt />
+            <span>Disconnect</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* MAIN WORKSPACE */}
+      <main className="vault-main">
+        <header className="vault-topbar">
+          <div className="topbar-left">
+            <button
+              className="mobile-menu"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Open menu"
+            >
+              <FaBars />
+            </button>
+
+            <div className="breadcrumb">
+              <span>Workspace</span>
+              <span className="breadcrumb-separator">/</span>
+              <strong>{viewTitle}</strong>
+            </div>
+          </div>
+
+          <div className="topbar-right">
+            <div className="connection-status">
+              <span className="status-dot" />
+              Private workspace
+            </div>
+
+            <div className="topbar-avatar">
+              <FaShieldAlt />
+            </div>
+          </div>
         </header>
 
-        {/* STATS */}
-        <div className="stats-grid" style={{ marginBottom: 20 }}>
-          <div className="glass-panel stat-card">
-            <h3>{files.length}</h3>
-            <p>Encrypted Files</p>
-          </div>
-          <div className="glass-panel stat-card">
-            <h3>AES-256</h3>
-            <p>Encryption</p>
-          </div>
-          <div className="glass-panel stat-card">
-            <h3>Secure</h3>
-            <p>Connection</p>
-          </div>
-        </div>
+        <div className="vault-content">
+          {/* PAGE INTRO */}
+          <section className="page-heading">
+            <div>
+              <span className="eyebrow">YOUR DIGITAL SPACE</span>
+              <h1>{viewTitle}</h1>
+              <p>
+                Manage your encrypted files and keep your digital assets
+                protected.
+              </p>
+            </div>
 
-        {/* 🔐 DEDICATED PRIVATE KEY ZONE */}
-        <div className="glass-panel" style={{ 
-          marginBottom: 20, 
-          display: "flex", 
-          flexDirection: "row", 
-          alignItems: "center", 
-          justifyContent: "space-between",
-          padding: "20px"
-        }}>
-          <div>
-            <h3 style={{ margin: "0 0 5px 0" }}>Key Configuration</h3>
-            <p style={{ margin: 0, opacity: 0.8, fontSize: "0.9rem" }}>
-              Choose your private key (.txt) to enable decryption and sharing.
-            </p>
-          </div>
-          <input 
-            type="file" 
-            accept=".txt"
-            onChange={(e) => setPrivateKeyFile(e.target.files[0])}
-            style={{ 
-              padding: "10px", 
-              border: "1px solid rgba(255, 255, 255, 0.2)", 
-              borderRadius: "8px",
-              background: "rgba(0, 0, 0, 0.1)"
-            }}
-          />
-        </div>
+            <button
+              className="primary-button"
+              onClick={() =>
+                document
+                  .getElementById("upload-section")
+                  ?.scrollIntoView({ behavior: "smooth" })
+              }
+            >
+              <FaPlus />
+              Upload a file
+            </button>
+          </section>
 
-        {/* UPLOAD ZONE */}
-        <div className="glass-panel upload-zone">
-          <div style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 10
-          }}>
-            <label style={{ fontWeight: 600 }}>Select File to Encrypt & Vault:</label>
-            <input type="file"
-              onChange={(e) => setFile(e.target.files[0])}
-            />
-          </div>
-
-          <button className="btn-premium" onClick={uploadFile} style={{ marginTop: 15 }}>
-            <FaCloudUploadAlt /> Upload
-          </button>
-        </div>
-
-        {/* FILE GRID */}
-        <div className="file-grid">
-          {files.map((f) => (
-            <div key={f._id} className="glass-panel file-card">
-
-              <FaFileAlt size={28} />
-
-              <h4 style={{ marginTop: 12 }}>{f.filename}</h4>
-
-              <div className="badge">
-                <FaLock size={12} /> Encrypted
+          {/* STATS */}
+          <section className="overview-grid">
+            <div className="overview-card">
+              <div className="overview-card-top">
+                <div className="overview-icon teal-icon">
+                  <FaFolderOpen />
+                </div>
+                <span className="overview-caption">YOUR STORAGE</span>
               </div>
 
-              <div style={{ display: "flex", gap: 10, width: "100%", flexWrap: "wrap", marginTop: "15px" }}>
+              <h2>{files.length}</h2>
+              <p>Total encrypted files</p>
+            </div>
+
+            <div className="overview-card">
+              <div className="overview-card-top">
+                <div className="overview-icon lavender-icon">
+                  <FaLock />
+                </div>
+                <span className="overview-caption">ENCRYPTION</span>
+              </div>
+
+              <h2>AES-256</h2>
+              <p>Client-side file encryption</p>
+            </div>
+
+            <div className="overview-card">
+              <div className="overview-card-top">
+                <div className="overview-icon peach-icon">
+                  <FaUsers />
+                </div>
+                <span className="overview-caption">SHARING</span>
+              </div>
+
+              <h2>{totalSharedRecipients}</h2>
+              <p>File sharing recipients</p>
+            </div>
+          </section>
+
+          {/* PRIVATE KEY */}
+          <section className="security-panel">
+            <div className="security-panel-icon">
+              <FaKey />
+            </div>
+
+            <div className="security-panel-content">
+              <div className="security-title-row">
+                <h3>Private key configuration</h3>
+
+                {privateKeyFile && (
+                  <span className="key-ready">
+                    <FaCheckCircle /> Key loaded
+                  </span>
+                )}
+              </div>
+
+              <p>
+                Select your private key file to decrypt downloads and securely
+                share files with others. Your private key stays on this device
+                while you use the application.
+              </p>
+
+              <label className="key-upload-button">
+                <FaKey />
+                {privateKeyFile ? "Change private key" : "Choose private key"}
+
+                <input
+                  type="file"
+                  accept=".txt"
+                  onChange={(e) =>
+                    setPrivateKeyFile(e.target.files?.[0] || null)
+                  }
+                />
+              </label>
+
+              {privateKeyFile && (
+                <span className="selected-key-name">
+                  {privateKeyFile.name}
+                </span>
+              )}
+            </div>
+          </section>
+
+          {/* UPLOAD SECTION */}
+          <section className="upload-panel" id="upload-section">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">ADD TO YOUR VAULT</span>
+                <h2>Upload new file</h2>
+                <p>Your file is encrypted in your browser before uploading.</p>
+              </div>
+            </div>
+
+            <div className={`upload-dropzone ${file ? "has-file" : ""}`}>
+              <div className="upload-cloud-icon">
+                <FaCloudUploadAlt />
+              </div>
+
+              <div className="upload-copy">
+                <h3>{file ? file.name : "Choose a file to get started"}</h3>
+
+                <p>
+                  {file
+                    ? `${formatFileSize(file.size)} selected`
+                    : "Select a file from your device to encrypt and store it securely."}
+                </p>
+              </div>
+
+              <div className="upload-actions">
+                <label className="browse-button">
+                  Browse files
+                  <input
+                    id="vault-file-input"
+                    type="file"
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                  />
+                </label>
 
                 <button
-                  className="btn-premium secondary"
-                  style={{ flex: 1 }}
-                  onClick={() => downloadFile(f._id)}
+                  className="primary-button upload-submit"
+                  onClick={uploadFile}
+                  disabled={!file || uploading}
                 >
-                  <FaDownload /> Decrypt
+                  <FaCloudUploadAlt />
+                  {uploading ? "Encrypting & uploading..." : "Upload securely"}
                 </button>
+              </div>
+            </div>
+          </section>
 
-                {currentUserId === f.owner && (
-                  <>
-                    <button
-                      className="btn-premium secondary"
-                      style={{ flex: 1 }}
-                      onClick={() => shareFile(f._id)}
-                    >
-                      <FaShare /> Share
-                    </button>
-
-                    {/* 👉 THE NEW DELETE BUTTON */}
-                    <button
-                      className="btn-premium secondary"
-                      style={{ flex: 1, borderColor: "rgba(255, 71, 87, 0.5)", color: "#ff4757" }}
-                      onClick={() => deleteFile(f._id)}
-                    >
-                      <FaTrash /> Delete
-                    </button>
-
-                    {/* 🔐 SHARED USERS */}
-                    {currentUserId === f.owner && f.encryptedKeys?.length > 1 && (
-                      <div style={{ width: "100%", marginTop: "10px" }}>
-                        <p style={{ fontSize: "0.75rem", opacity: 0.7 }}>Shared With:</p>
-
-                        {f.encryptedKeys.map((k) => {
-                          const userId = k.user._id || k.user;
-                          if (userId === f.owner) return null;
-
-                          return (
-                            <div
-                              key={k.user._id}
-                              style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                alignItems: "center",
-                                marginTop: "6px",
-                                background: "rgba(255,255,255,0.03)",
-                                padding: "6px 10px",
-                                borderRadius: "8px"
-                              }}
-                            >
-                              <span style={{ fontSize: "0.8rem" }}>
-                                {k.user.email}
-                              </span>
-
-                              <button
-                                className="btn-premium secondary"
-                                style={{
-                                  padding: "4px 10px",
-                                  fontSize: "0.75rem",
-                                  borderColor: "rgba(255, 71, 87, 0.5)",
-                                  color: "#ff4757"
-                                }}
-                                onClick={() => revokeAccess(f._id, k.user._id || k.user)}
-                              >
-                                Revoke
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </>
-                )}
-
+          {/* FILE COLLECTION */}
+          <section className="files-section">
+            <div className="files-heading">
+              <div>
+                <span className="eyebrow">YOUR COLLECTION</span>
+                <h2>{viewTitle}</h2>
+                <p>
+                  {displayedFiles.length}{" "}
+                  {displayedFiles.length === 1 ? "file" : "files"} available
+                </p>
               </div>
 
-            </div>
-          ))}
-        </div>
+              <div className="file-toolbar">
+                <div className="search-box">
+                  <FaSearch />
 
-      </div>
-    </>
+                  <input
+                    type="text"
+                    placeholder="Search files..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery("")}
+                      aria-label="Clear search"
+                    >
+                      <FaTimes />
+                    </button>
+                  )}
+                </div>
+
+                <div className="sort-box">
+                  <FaSortAmountDown />
+
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    aria-label="Sort files"
+                  >
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="name-asc">Name A-Z</option>
+                    <option value="name-desc">Name Z-A</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {loadingFiles ? (
+              <div className="empty-state">
+                <div className="loading-spinner" />
+                <h3>Loading your files</h3>
+                <p>Preparing your secure collection...</p>
+              </div>
+            ) : displayedFiles.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-icon">
+                  <FaFolderOpen />
+                </div>
+
+                <h3>
+                  {searchQuery
+                    ? "No matching files found"
+                    : activeView === "shared"
+                      ? "Nothing shared with you yet"
+                      : "Your vault is waiting"}
+                </h3>
+
+                <p>
+                  {searchQuery
+                    ? "Try searching with a different file name."
+                    : activeView === "shared"
+                      ? "Files shared with your account will appear here."
+                      : "Upload your first file to start building your secure collection."}
+                </p>
+
+                {!searchQuery && activeView !== "shared" && (
+                  <button
+                    className="primary-button"
+                    onClick={() =>
+                      document
+                        .getElementById("upload-section")
+                        ?.scrollIntoView({ behavior: "smooth" })
+                    }
+                  >
+                    <FaPlus />
+                    Upload your first file
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="vault-file-grid">
+                {displayedFiles.map((f) => {
+                  const ownerId = getId(f.owner);
+                  const isOwner = currentUserId === ownerId;
+
+                  const sharedUsers =
+                    f.encryptedKeys?.filter(
+                      (k) => getId(k.user) !== ownerId
+                    ) || [];
+
+                  const fileType = getFileType(f.filename);
+                  const FileIcon = fileType.Icon;
+                  const fileDate = getFileDate(f._id);
+
+                  // Size is shown only if the API actually provides it.
+                  const fileSize = formatFileSize(
+                    f.originalSize ?? f.size
+                  );
+
+                  return (
+                    <article className="vault-file-card" key={f._id}>
+                      <div className="file-card-top">
+                        <div className={`file-type-icon ${fileType.className}`}>
+                          <FileIcon />
+                        </div>
+
+                        <span className="encrypted-tag">
+                          <FaLock />
+                          Encrypted
+                        </span>
+                      </div>
+
+                      <div className="file-card-info">
+                        <h3 title={f.filename}>{f.filename}</h3>
+
+                        <span className="file-type-label">
+                          {fileType.label}
+                        </span>
+                      </div>
+
+                      <div className="file-metadata">
+                        <div>
+                          <FaCalendarAlt />
+                          <span>
+                            {fileDate
+                              ? `Added ${formatDate(fileDate)}`
+                              : "Upload date unavailable"}
+                          </span>
+                        </div>
+
+                        <div>
+                          <FaShieldAlt />
+                          <span>
+                            {isOwner ? "Owned by you" : "Shared with you"}
+                          </span>
+                        </div>
+
+                        {fileSize && (
+                          <div>
+                            <FaFileAlt />
+                            <span>{fileSize}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="file-card-divider" />
+
+                      <div className="file-card-actions">
+                        <button
+                          className="file-action-button download-action"
+                          onClick={() => downloadFile(f._id)}
+                          title="Download and decrypt"
+                        >
+                          <FaDownload />
+                          <span>Decrypt</span>
+                        </button>
+
+                        {isOwner && (
+                          <>
+                            <button
+                              className="file-action-button"
+                              onClick={() => shareFile(f._id)}
+                              title="Share file"
+                            >
+                              <FaShare />
+                              <span>Share</span>
+                            </button>
+
+                            <button
+                              className="file-action-button delete-action"
+                              onClick={() => deleteFile(f._id)}
+                              title="Delete file"
+                            >
+                              <FaTrash />
+                              <span>Delete</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
+
+                      {isOwner && sharedUsers.length > 0 && (
+                        <div className="shared-users">
+                          <div className="shared-users-heading">
+                            <FaUsers />
+                            <span>Shared with</span>
+                            <span className="shared-count">
+                              {sharedUsers.length}
+                            </span>
+                          </div>
+
+                          {sharedUsers.map((k, index) => {
+                            const userId = getId(k.user);
+                            const email =
+                              typeof k.user === "object"
+                                ? k.user.email
+                                : "Shared user";
+
+                            return (
+                              <div
+                                className="shared-user-row"
+                                key={userId || index}
+                              >
+                                <span className="shared-user-email">
+                                  {email || "Shared user"}
+                                </span>
+
+                                <button
+                                  onClick={() =>
+                                    revokeAccess(f._id, userId)
+                                  }
+                                  title="Revoke access"
+                                >
+                                  Revoke
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <footer className="vault-footer">
+            <div>
+              <FaShieldAlt />
+              <span>Nexus Vault</span>
+            </div>
+
+            <p>Secure storage. Private by design.</p>
+          </footer>
+        </div>
+      </main>
+    </div>
   );
 }
 

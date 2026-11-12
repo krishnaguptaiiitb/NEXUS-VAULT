@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 
 const fileSchema = new mongoose.Schema({
@@ -5,7 +6,6 @@ const fileSchema = new mongoose.Schema({
     path: String,
     encryptedPath: String,
 
-    // 🔥 UPDATED: MULTI-USER KEYS
     encryptedKeys: [
         {
             user: {
@@ -17,6 +17,13 @@ const fileSchema = new mongoose.Schema({
     ],
 
     iv: String,
+
+    encryptionAlgorithm: {
+        type: String,
+        enum: ["AES-CBC", "AES-GCM"],
+        default: "AES-CBC"
+    },
+
     hash: String,
     signature: String,
 

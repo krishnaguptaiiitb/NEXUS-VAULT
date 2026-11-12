@@ -1,9 +1,18 @@
+
 const User = require("../models/userModel");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 const generateToken = (id) => {
-    return jwt.sign({ id }, "secret123", { expiresIn: "1d" });
+    if (!process.env.JWT_SECRET) {
+        throw new Error("JWT_SECRET is not configured");
+    }
+
+    return jwt.sign(
+        { id },
+        process.env.JWT_SECRET,
+        { expiresIn: "1d" }
+    );
 };
 
 const registerUser = async (req, res) => {
@@ -13,7 +22,9 @@ const registerUser = async (req, res) => {
         const userExists = await User.findOne({ email });
 
         if (userExists) {
-            return res.status(400).json({ message: "User already exists" });
+            return res.status(400).json({
+                message: "User already exists"
+            });
         }
 
         const salt = await bcrypt.genSalt(10);
@@ -23,7 +34,7 @@ const registerUser = async (req, res) => {
             name,
             email,
             password: hashedPassword,
-            publicKey // ✅ ONLY public key stored
+            publicKey
         });
 
         res.status(201).json({
@@ -33,6 +44,7 @@ const registerUser = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("Registration error:", error.message);
         res.status(500).json({ message: "Server error" });
     }
 };
@@ -44,7 +56,9 @@ const getUserByEmail = async (req, res) => {
         const user = await User.findOne({ email });
 
         if (!user) {
-            return res.status(404).json({ message: "User not found" });
+            return res.status(404).json({
+                message: "User not found"
+            });
         }
 
         res.json({
@@ -54,7 +68,9 @@ const getUserByEmail = async (req, res) => {
         });
 
     } catch (error) {
-        res.status(500).json({ message: "Error fetching user" });
+        res.status(500).json({
+            message: "Error fetching user"
+        });
     }
 };
 
@@ -65,25 +81,37 @@ const loginUser = async (req, res) => {
         const user = await User.findOne({ email });
 
         if (!user) {
-            return res.status(400).json({ message: "Invalid credentials" });
+            return res.status(400).json({
+                message: "Invalid credentials"
+            });
         }
 
-        const isMatch = await bcrypt.compare(password, user.password);
+        const isMatch = await bcrypt.compare(
+            password,
+            user.password
+        );
 
         if (!isMatch) {
-            return res.status(400).json({ message: "Invalid credentials" });
+            return res.status(400).json({
+                message: "Invalid credentials"
+            });
         }
 
         res.status(200).json({
             _id: user._id,
             email: user.email,
             token: generateToken(user._id),
-            publicKey: user.publicKey // optional
+            publicKey: user.publicKey
         });
 
     } catch (error) {
+        console.error("Login error:", error.message);
         res.status(500).json({ message: "Server error" });
     }
 };
 
-module.exports = { registerUser, loginUser, getUserByEmail };
+module.exports = {
+    registerUser,
+    loginUser,
+    getUserByEmail
+};
