@@ -3,6 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import socket from "../socket";
 import {
+  wrapFileKeyForRecipient,
+  unwrapFileKey
+} from "../utils/hybridCrypto";
+import {
   FaShieldAlt,
   FaFileAlt,
   FaFilePdf,
@@ -32,6 +36,10 @@ import {
 import "./Dashboard.css";
 
 const API_URL = "http://localhost:5000";
+const CURRENT_ENCRYPTION_ALGORITHM = "AES-GCM";
+const AES_KEY_LENGTH = 256;
+const GCM_NONCE_LENGTH = 12;
+const GCM_TAG_LENGTH = 128;
 
 function getId(value) {
   if (!value) return "";
@@ -101,6 +109,29 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function bufferToBase64(buffer) {
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(i, i + chunkSize));
+  }
+
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return bytes;
+}
+
 function Dashboard() {
   const [file, setFile] = useState(null);
   const [files, setFiles] = useState([]);
@@ -115,33 +146,55 @@ function Dashboard() {
   const token = localStorage.getItem("token");
   const currentUserId = localStorage.getItem("userId");
 
-  const bufferToBase64 = (buffer) => {
-    let binary = "";
-    const bytes = new Uint8Array(buffer);
-    const chunkSize = 0x8000;
+  // LOAD PRIVATE KEY MATERIAL
+  const getPrivateKeyMaterial = async () => {
+    let material = {};
 
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode(...bytes.slice(i, i + chunkSize));
+    if (privateKeyFile) {
+      const keyText = (await privateKeyFile.text()).trim();
+
+      if (!keyText) {
+        throw new Error("The selected private key file is empty.");
+      }
+
+      if (privateKeyFile.name.toLowerCase().endsWith(".json")) {
+        let backup;
+
+        try {
+          backup = JSON.parse(keyText);
+        } catch {
+          throw new Error("Invalid hybrid private key backup JSON.");
+        }
+
+        material = {
+          rsaPrivateKey: backup.rsaPrivateKey,
+          x25519PrivateKey: backup.x25519PrivateKey,
+          mlkem768PrivateKey: backup.mlkem768PrivateKey,
+          keyVersion: backup.keyVersion
+        };
+      } else {
+        material.rsaPrivateKey = keyText;
+      }
     }
 
-    return btoa(binary);
+    material.rsaPrivateKey =
+      material.rsaPrivateKey || localStorage.getItem("privateKey");
+    material.x25519PrivateKey =
+      material.x25519PrivateKey || localStorage.getItem("x25519PrivateKey");
+    material.mlkem768PrivateKey =
+      material.mlkem768PrivateKey || localStorage.getItem("mlkem768PrivateKey");
+
+    return material;
   };
 
-  // PRIVATE KEY
-  const getPrivateKey = async () => {
-    if (!privateKeyFile) {
-      throw new Error("Upload your private key first.");
+  const importRsaPrivateKey = async (privateKeyBase64) => {
+    if (!privateKeyBase64) {
+      throw new Error("RSA private key is unavailable. Select your RSA or hybrid backup.");
     }
 
-    const keyText = (await privateKeyFile.text()).trim();
-
-    if (!keyText) {
-      throw new Error("The selected private key file is empty.");
-    }
-
-    return await window.crypto.subtle.importKey(
+    return window.crypto.subtle.importKey(
       "pkcs8",
-      Uint8Array.from(atob(keyText), (c) => c.charCodeAt(0)),
+      base64ToBytes(privateKeyBase64),
       { name: "RSA-OAEP", hash: "SHA-256" },
       false,
       ["decrypt"]
@@ -166,7 +219,6 @@ function Dashboard() {
 
   useEffect(() => {
     fetchFiles();
-    // Initial fetch when the Dashboard mounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -197,21 +249,29 @@ function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ENCRYPT FILE
+  // AES-256-GCM ENCRYPTION FOR NEW FILES
   const encryptFile = async (selectedFile) => {
     const buffer = await selectedFile.arrayBuffer();
     const startTime = performance.now();
 
     const key = await window.crypto.subtle.generateKey(
-      { name: "AES-CBC", length: 256 },
+      { name: "AES-GCM", length: AES_KEY_LENGTH },
       true,
-      ["encrypt"]
+      ["encrypt", "decrypt"]
     );
 
-    const iv = window.crypto.getRandomValues(new Uint8Array(16));
+    // GCM requires a unique nonce for every encryption under the same key.
+    // A fresh random 96-bit nonce is generated for each file.
+    const nonce = window.crypto.getRandomValues(
+      new Uint8Array(GCM_NONCE_LENGTH)
+    );
 
     const encryptedData = await window.crypto.subtle.encrypt(
-      { name: "AES-CBC", iv },
+      {
+        name: "AES-GCM",
+        iv: nonce,
+        tagLength: GCM_TAG_LENGTH
+      },
       key,
       buffer
     );
@@ -219,7 +279,7 @@ function Dashboard() {
     const endTime = performance.now();
 
     console.log(
-      `[ENCRYPT] Size: ${(selectedFile.size / 1000000).toFixed(2)} MB | Time: ${(endTime - startTime).toFixed(2)} ms`
+      `[ENCRYPT-AES-GCM] Size: ${(selectedFile.size / 1000000).toFixed(2)} MB | Time: ${(endTime - startTime).toFixed(2)} ms`
     );
 
     const rawKey = await window.crypto.subtle.exportKey("raw", key);
@@ -227,11 +287,12 @@ function Dashboard() {
     return {
       encryptedBlob: new Blob([encryptedData]),
       rawKey,
-      iv: bufferToBase64(iv)
+      iv: bufferToBase64(nonce),
+      encryptionAlgorithm: CURRENT_ENCRYPTION_ALGORITHM
     };
   };
 
-  // UPLOAD FILE
+  // UPLOAD FILE WITH HYBRID KEY ENVELOPE
   const uploadFile = async () => {
     if (!file) {
       alert("Select a file first.");
@@ -241,39 +302,49 @@ function Dashboard() {
     try {
       setUploading(true);
 
-      const { encryptedBlob, rawKey, iv } = await encryptFile(file);
-      const publicKeyBase64 = localStorage.getItem("publicKey");
+      const {
+        encryptedBlob,
+        rawKey,
+        iv,
+        encryptionAlgorithm
+      } = await encryptFile(file);
 
-      if (!publicKeyBase64) {
-        throw new Error("Public key not found. Please log in again.");
+      const x25519PublicKey = localStorage.getItem("x25519PublicKey");
+      const mlkem768PublicKey = localStorage.getItem("mlkem768PublicKey");
+
+      if (!x25519PublicKey || !mlkem768PublicKey) {
+        throw new Error(
+          "Hybrid public keys are unavailable. Please sign in again or register hybrid keys."
+        );
       }
 
-      const publicKey = await window.crypto.subtle.importKey(
-        "spki",
-        Uint8Array.from(atob(publicKeyBase64), (c) => c.charCodeAt(0)),
-        { name: "RSA-OAEP", hash: "SHA-256" },
-        false,
-        ["encrypt"]
-      );
-
-      const encryptedKeyBuffer = await window.crypto.subtle.encrypt(
-        { name: "RSA-OAEP" },
-        publicKey,
-        rawKey
-      );
-
-      const encryptedKey = bufferToBase64(encryptedKeyBuffer);
+      const envelope = await wrapFileKeyForRecipient(rawKey, {
+        x25519PublicKey,
+        mlkem768PublicKey
+      });
 
       const formData = new FormData();
       formData.append("file", encryptedBlob, file.name);
-      formData.append("encryptedKey", encryptedKey);
       formData.append("iv", iv);
+      formData.append("encryptionAlgorithm", encryptionAlgorithm);
+      formData.append("envelopeVersion", String(envelope.envelopeVersion));
+      formData.append("keyAlgorithm", envelope.keyAlgorithm);
+      formData.append(
+        "x25519EphemeralPublicKey",
+        envelope.x25519EphemeralPublicKey
+      );
+      formData.append("mlkemCiphertext", envelope.mlkemCiphertext);
+      formData.append("hkdfSalt", envelope.hkdfSalt);
+      formData.append("wrappingNonce", envelope.wrappingNonce);
+      formData.append("wrappedKey", envelope.wrappedKey);
 
       await axios.post(`${API_URL}/api/files/upload`, formData, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      alert("File uploaded securely.");
+      alert(
+        "File encrypted with AES-256-GCM and its key protected using X25519 + ML-KEM-768."
+      );
       setFile(null);
 
       const input = document.getElementById("vault-file-input");
@@ -281,7 +352,7 @@ function Dashboard() {
 
       await fetchFiles();
     } catch (err) {
-      console.error("Upload error:", err);
+      console.error("Hybrid upload error:", err);
       alert(err.response?.data?.message || err.message || "Upload failed.");
     } finally {
       setUploading(false);
@@ -289,6 +360,8 @@ function Dashboard() {
   };
 
   // DOWNLOAD AND DECRYPT
+  // Supports legacy RSA envelopes and version-2 hybrid envelopes.
+  // Supports AES-GCM and legacy AES-CBC file encryption.
   const downloadFile = async (id) => {
     try {
       const res = await axios.get(
@@ -298,44 +371,96 @@ function Dashboard() {
         }
       );
 
-      const { encryptedData, encryptedKey, iv, filename } = res.data;
+      const {
+        encryptedData,
+        encryptedKey,
+        iv,
+        filename,
+        encryptionAlgorithm,
+        envelopeVersion,
+        keyAlgorithm
+      } = res.data;
 
-      const encryptedBuffer = Uint8Array.from(
-        atob(encryptedData),
-        (c) => c.charCodeAt(0)
-      );
+      const algorithm = encryptionAlgorithm || "AES-CBC";
 
-      const privateKey = await getPrivateKey();
+      if (!["AES-GCM", "AES-CBC"].includes(algorithm)) {
+        throw new Error(`Unsupported encryption algorithm: ${algorithm}`);
+      }
 
-      const decryptedKeyBuffer = await window.crypto.subtle.decrypt(
-        { name: "RSA-OAEP" },
-        privateKey,
-        Uint8Array.from(atob(encryptedKey), (c) => c.charCodeAt(0))
-      );
+      const encryptedBuffer = base64ToBytes(encryptedData);
+      const privateKeys = await getPrivateKeyMaterial();
+
+      let decryptedKeyBuffer;
+
+      if (
+        Number(envelopeVersion) === 2 &&
+        keyAlgorithm === "X25519-ML-KEM-768"
+      ) {
+        decryptedKeyBuffer = await unwrapFileKey(
+          res.data,
+          {
+            x25519PrivateKey: privateKeys.x25519PrivateKey,
+            mlkem768PrivateKey: privateKeys.mlkem768PrivateKey
+          }
+        );
+      } else {
+        if (!encryptedKey) {
+          throw new Error("The file does not contain a supported key envelope.");
+        }
+
+        const privateKey = await importRsaPrivateKey(
+          privateKeys.rsaPrivateKey
+        );
+
+        decryptedKeyBuffer = await window.crypto.subtle.decrypt(
+          { name: "RSA-OAEP" },
+          privateKey,
+          base64ToBytes(encryptedKey)
+        );
+      }
 
       const aesKey = await window.crypto.subtle.importKey(
         "raw",
         decryptedKeyBuffer,
-        { name: "AES-CBC" },
+        { name: algorithm },
         false,
         ["decrypt"]
       );
 
       const startTime = performance.now();
+      const nonce = base64ToBytes(iv);
+      let decrypted;
 
-      const decrypted = await window.crypto.subtle.decrypt(
-        {
-          name: "AES-CBC",
-          iv: Uint8Array.from(atob(iv), (c) => c.charCodeAt(0))
-        },
-        aesKey,
-        encryptedBuffer
-      );
+      if (algorithm === "AES-GCM") {
+        if (nonce.length !== GCM_NONCE_LENGTH) {
+          throw new Error("Invalid AES-GCM nonce length.");
+        }
+
+        decrypted = await window.crypto.subtle.decrypt(
+          {
+            name: "AES-GCM",
+            iv: nonce,
+            tagLength: GCM_TAG_LENGTH
+          },
+          aesKey,
+          encryptedBuffer
+        );
+      } else {
+        if (nonce.length !== 16) {
+          throw new Error("Invalid legacy AES-CBC IV length.");
+        }
+
+        decrypted = await window.crypto.subtle.decrypt(
+          { name: "AES-CBC", iv: nonce },
+          aesKey,
+          encryptedBuffer
+        );
+      }
 
       const endTime = performance.now();
 
       console.log(
-        `[DECRYPT] File: ${filename} | Time: ${(endTime - startTime).toFixed(2)} ms`
+        `[DECRYPT-${algorithm}] File: ${filename} | Time: ${(endTime - startTime).toFixed(2)} ms`
       );
 
       const blob = new Blob([decrypted]);
@@ -351,31 +476,33 @@ function Dashboard() {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err) {
       console.error("Download/decryption error:", err);
-      alert(err.message || "Decryption failed.");
+
+      if (err.name === "OperationError") {
+        alert(
+          "Decryption failed. Your private key may be incorrect, or the encrypted data may have been modified."
+        );
+      } else {
+        alert(err.message || "Decryption failed.");
+      }
     }
   };
 
-  // SHARE FILE
+  // SHARE FILE USING A RECIPIENT-SPECIFIC ENVELOPE
   const shareFile = async (fileId) => {
     const email = window.prompt("Enter the email address to share with:");
     if (!email || !email.trim()) return;
 
-    if (!privateKeyFile) {
-      alert("Upload your private key first.");
-      return;
-    }
-
     try {
       const userRes = await axios.post(
         `${API_URL}/api/users/get-by-email`,
-        { email: email.trim() },
+        { email: email.trim().toLowerCase() },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
       const receiver = userRes.data;
 
-      if (!receiver?.publicKey || !receiver?._id) {
-        throw new Error("The recipient does not have a valid public key.");
+      if (!receiver?._id) {
+        throw new Error("Recipient account was not found.");
       }
 
       const keyRes = await axios.get(
@@ -383,37 +510,80 @@ function Dashboard() {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      const { encryptedKey } = keyRes.data;
-      const privateKey = await getPrivateKey();
+      const ownerEnvelope = keyRes.data;
+      const privateKeys = await getPrivateKeyMaterial();
+      let rawFileKey;
 
-      const decryptedKeyBuffer = await window.crypto.subtle.decrypt(
-        { name: "RSA-OAEP" },
-        privateKey,
-        Uint8Array.from(atob(encryptedKey), (c) => c.charCodeAt(0))
-      );
+      if (
+        Number(ownerEnvelope.envelopeVersion) === 2 &&
+        ownerEnvelope.keyAlgorithm === "X25519-ML-KEM-768"
+      ) {
+        rawFileKey = await unwrapFileKey(
+          ownerEnvelope,
+          {
+            x25519PrivateKey: privateKeys.x25519PrivateKey,
+            mlkem768PrivateKey: privateKeys.mlkem768PrivateKey
+          }
+        );
+      } else {
+        if (!ownerEnvelope.encryptedKey) {
+          throw new Error("The owner's key envelope is invalid.");
+        }
 
-      const receiverPublicKey = await window.crypto.subtle.importKey(
-        "spki",
-        Uint8Array.from(atob(receiver.publicKey), (c) => c.charCodeAt(0)),
-        { name: "RSA-OAEP", hash: "SHA-256" },
-        false,
-        ["encrypt"]
-      );
+        const rsaPrivateKey = await importRsaPrivateKey(
+          privateKeys.rsaPrivateKey
+        );
 
-      const newEncryptedKeyBuffer = await window.crypto.subtle.encrypt(
-        { name: "RSA-OAEP" },
-        receiverPublicKey,
-        decryptedKeyBuffer
-      );
+        rawFileKey = await window.crypto.subtle.decrypt(
+          { name: "RSA-OAEP" },
+          rsaPrivateKey,
+          base64ToBytes(ownerEnvelope.encryptedKey)
+        );
+      }
 
-      const newEncryptedKey = bufferToBase64(newEncryptedKeyBuffer);
+      let recipientEnvelope;
+
+      if (
+        receiver.x25519PublicKey &&
+        receiver.mlkem768PublicKey
+      ) {
+        recipientEnvelope = await wrapFileKeyForRecipient(
+          rawFileKey,
+          {
+            x25519PublicKey: receiver.x25519PublicKey,
+            mlkem768PublicKey: receiver.mlkem768PublicKey
+          }
+        );
+      } else if (receiver.publicKey) {
+        const receiverPublicKey = await window.crypto.subtle.importKey(
+          "spki",
+          base64ToBytes(receiver.publicKey),
+          { name: "RSA-OAEP", hash: "SHA-256" },
+          false,
+          ["encrypt"]
+        );
+
+        const encryptedKeyBuffer = await window.crypto.subtle.encrypt(
+          { name: "RSA-OAEP" },
+          receiverPublicKey,
+          rawFileKey
+        );
+
+        recipientEnvelope = {
+          encryptedKey: bufferToBase64(encryptedKeyBuffer)
+        };
+      } else {
+        throw new Error(
+          "The recipient has no supported public encryption keys."
+        );
+      }
 
       await axios.post(
         `${API_URL}/api/files/share`,
         {
           fileId,
-          encryptedKey: newEncryptedKey,
-          receiverId: receiver._id
+          receiverId: receiver._id,
+          ...recipientEnvelope
         },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -422,7 +592,11 @@ function Dashboard() {
       await fetchFiles();
     } catch (error) {
       console.error("Share error:", error);
-      alert(error.response?.data?.message || error.message || "Sharing failed.");
+      alert(
+        error.response?.data?.message ||
+        error.message ||
+        "Sharing failed."
+      );
     }
   };
 
@@ -445,7 +619,6 @@ function Dashboard() {
       );
 
       alert(res.data.message || "Access revoked.");
-
       await fetchFiles();
     } catch (err) {
       console.error("Revoke error:", err);
@@ -478,6 +651,10 @@ function Dashboard() {
     localStorage.removeItem("userId");
     localStorage.removeItem("publicKey");
     localStorage.removeItem("privateKey");
+    localStorage.removeItem("x25519PublicKey");
+    localStorage.removeItem("mlkem768PublicKey");
+    localStorage.removeItem("x25519PrivateKey");
+    localStorage.removeItem("mlkem768PrivateKey");
     window.location.reload();
   };
 
@@ -753,9 +930,9 @@ function Dashboard() {
               </div>
 
               <p>
-                Select your private key file to decrypt downloads and securely
-                share files with others. Your private key stays on this device
-                while you use the application.
+                Select your RSA private key backup (.txt) or hybrid private
+                key backup (.json) to decrypt downloads and share files. Your
+                private keys stay on this device while you use the application.
               </p>
 
               <label className="key-upload-button">
@@ -764,7 +941,7 @@ function Dashboard() {
 
                 <input
                   type="file"
-                  accept=".txt"
+                  accept=".txt,.json,application/json,text/plain"
                   onChange={(e) =>
                     setPrivateKeyFile(e.target.files?.[0] || null)
                   }
@@ -933,7 +1110,6 @@ function Dashboard() {
                   const FileIcon = fileType.Icon;
                   const fileDate = getFileDate(f._id);
 
-                  // Size is shown only if the API actually provides it.
                   const fileSize = formatFileSize(
                     f.originalSize ?? f.size
                   );

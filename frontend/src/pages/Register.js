@@ -9,6 +9,40 @@ import {
 } from "react-icons/fa";
 import "./Register.css";
 
+const API_URL = "http://localhost:5000";
+
+const toBase64 = (buffer) => {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(
+      ...bytes.subarray(i, i + 0x8000)
+    );
+  }
+
+  return btoa(binary);
+};
+
+const downloadTextFile = (
+  content,
+  filename,
+  type = "text/plain"
+) => {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
 function Register({ setIsLogin }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -16,8 +50,36 @@ function Register({ setIsLogin }) {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
+  // =====================================================
+  // CHECK BROWSER CRYPTOGRAPHY SUPPORT
+  // =====================================================
+
+  const checkCryptoSupport = () => {
+    if (!window.isSecureContext || !window.crypto?.subtle) {
+      throw new Error(
+        "Secure browser cryptography is unavailable. Use HTTPS or localhost."
+      );
+    }
+
+    if (
+      typeof window.crypto.subtle.encapsulateBits !== "function" ||
+      typeof window.crypto.subtle.decapsulateBits !== "function"
+    ) {
+      throw new Error(
+        "Your browser does not support the required ML-KEM-768 WebCrypto APIs. Please use a compatible browser."
+      );
+    }
+  };
+
+  // =====================================================
+  // GENERATE CRYPTOGRAPHIC KEYS
+  // =====================================================
+
   const generateKeys = async () => {
-    const keyPair = await window.crypto.subtle.generateKey(
+    checkCryptoSupport();
+
+    // Legacy RSA-OAEP-2048 key pair.
+    const rsaKeyPair = await window.crypto.subtle.generateKey(
       {
         name: "RSA-OAEP",
         modulusLength: 2048,
@@ -28,43 +90,169 @@ function Register({ setIsLogin }) {
       ["encrypt", "decrypt"]
     );
 
-    const publicKey = await window.crypto.subtle.exportKey(
+    const rsaPublicKey = await window.crypto.subtle.exportKey(
       "spki",
-      keyPair.publicKey
+      rsaKeyPair.publicKey
     );
 
-    const privateKey = await window.crypto.subtle.exportKey(
+    const rsaPrivateKey = await window.crypto.subtle.exportKey(
       "pkcs8",
-      keyPair.privateKey
+      rsaKeyPair.privateKey
     );
+
+    // X25519 key agreement.
+    const x25519KeyPair = await window.crypto.subtle.generateKey(
+      {
+        name: "X25519"
+      },
+      true,
+      ["deriveBits"]
+    );
+
+    const x25519PublicKey = await window.crypto.subtle.exportKey(
+      "raw",
+      x25519KeyPair.publicKey
+    );
+
+    const x25519PrivateKey = await window.crypto.subtle.exportKey(
+      "pkcs8",
+      x25519KeyPair.privateKey
+    );
+
+    // Post-quantum ML-KEM-768.
+    const mlkemKeyPair = await window.crypto.subtle.generateKey(
+      {
+        name: "ML-KEM-768"
+      },
+      true,
+      ["encapsulateBits", "decapsulateBits"]
+    );
+
+    const mlkemPublicKey = await window.crypto.subtle.exportKey(
+      "raw-public",
+      mlkemKeyPair.publicKey
+    );
+
+    const mlkemPrivateKey = await window.crypto.subtle.exportKey(
+      "raw-seed",
+      mlkemKeyPair.privateKey
+    );
+
+    // Validate exported key lengths.
+    if (new Uint8Array(rsaPublicKey).length === 0) {
+      throw new Error("RSA public-key generation failed.");
+    }
+
+    if (new Uint8Array(x25519PublicKey).length !== 32) {
+      throw new Error("Invalid X25519 public-key length.");
+    }
+
+    if (new Uint8Array(mlkemPublicKey).length !== 1184) {
+      throw new Error("Invalid ML-KEM-768 public-key length.");
+    }
+
+    if (new Uint8Array(mlkemPrivateKey).length !== 64) {
+      throw new Error("Invalid ML-KEM-768 private-key length.");
+    }
 
     return {
-      publicKey: btoa(
-        String.fromCharCode(...new Uint8Array(publicKey))
-      ),
-      privateKey: btoa(
-        String.fromCharCode(...new Uint8Array(privateKey))
-      )
+      publicKeys: {
+        publicKey: toBase64(rsaPublicKey),
+        x25519PublicKey: toBase64(x25519PublicKey),
+        mlkem768PublicKey: toBase64(mlkemPublicKey)
+      },
+
+      privateKeys: {
+        product: "Nexus Vault",
+        backupType: "Hybrid Private Key Backup",
+        backupVersion: 1,
+        warning:
+          "Contains private cryptographic keys. Anyone with this file may be able to access files encrypted for this account. Keep it secure.",
+
+        rsaPrivateKey: toBase64(rsaPrivateKey),
+        x25519PrivateKey: toBase64(x25519PrivateKey),
+        mlkem768PrivateKey: toBase64(mlkemPrivateKey),
+
+        keyVersion: 1,
+
+        algorithms: {
+          rsa: "RSA-OAEP-2048",
+          x25519: "X25519",
+          postQuantum: "ML-KEM-768"
+        }
+      }
     };
   };
 
-  const downloadPrivateKey = (privateKey) => {
-    const blob = new Blob([privateKey], {
-      type: "text/plain"
-    });
+  // =====================================================
+  // SAVE PRIVATE KEY BACKUPS
+  // =====================================================
 
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
+  const savePrivateKeyBackups = (privateKeys) => {
+    // Legacy RSA-only backup.
+    downloadTextFile(
+      privateKeys.rsaPrivateKey,
+      "nexus-vault-private-key.txt"
+    );
 
-    link.href = url;
-    link.download = "nexus-vault-private-key.txt";
-
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // Complete hybrid private-key backup.
+    downloadTextFile(
+      JSON.stringify(privateKeys, null, 2),
+      "nexus-vault-hybrid-private-keys.json",
+      "application/json"
+    );
   };
+
+  // =====================================================
+  // STORE ACCOUNT AND PRIVATE KEY INFORMATION
+  // =====================================================
+
+  const storeAccountData = (responseData, publicKeys, privateKeys) => {
+    localStorage.setItem("token", responseData.token);
+    localStorage.setItem("userId", responseData._id);
+
+    // Legacy RSA compatibility.
+    localStorage.setItem(
+      "privateKey",
+      privateKeys.rsaPrivateKey
+    );
+
+    localStorage.setItem(
+      "publicKey",
+      publicKeys.publicKey
+    );
+
+    // Hybrid private keys.
+    localStorage.setItem(
+      "x25519PrivateKey",
+      privateKeys.x25519PrivateKey
+    );
+
+    localStorage.setItem(
+      "mlkem768PrivateKey",
+      privateKeys.mlkem768PrivateKey
+    );
+
+    // Hybrid public keys.
+    localStorage.setItem(
+      "x25519PublicKey",
+      publicKeys.x25519PublicKey
+    );
+
+    localStorage.setItem(
+      "mlkem768PublicKey",
+      publicKeys.mlkem768PublicKey
+    );
+
+    localStorage.setItem(
+      "hybridKeyVersion",
+      String(responseData.hybridKeyVersion || 1)
+    );
+  };
+
+  // =====================================================
+  // REGISTRATION
+  // =====================================================
 
   const handleRegister = async (e) => {
     e.preventDefault();
@@ -75,24 +263,55 @@ function Register({ setIsLogin }) {
       return;
     }
 
+    if (password.length < 8 || password.length > 128) {
+      setErrorMessage(
+        "Password must be between 8 and 128 characters."
+      );
+      return;
+    }
+
     try {
       setLoading(true);
 
-      const { publicKey, privateKey } = await generateKeys();
+      // Step 1: Generate all cryptographic keys.
+      const { publicKeys, privateKeys } = await generateKeys();
 
-      await axios.post("http://localhost:5000/api/users/register", {
-        name: name.trim(),
-        email: email.trim(),
-        password,
-        publicKey
-      });
+      // Step 2: Generate backups before contacting the server.
+      // This protects against a lost registration response.
+      savePrivateKeyBackups(privateKeys);
 
-      localStorage.setItem("privateKey", privateKey);
+      // Step 3: Register account and all public keys together.
+      const response = await axios.post(
+        `${API_URL}/api/users/register`,
+        {
+          name: name.trim(),
+          email: email.trim().toLowerCase(),
+          password,
 
-      downloadPrivateKey(privateKey);
+          publicKey: publicKeys.publicKey,
+          x25519PublicKey: publicKeys.x25519PublicKey,
+          mlkem768PublicKey: publicKeys.mlkem768PublicKey
+        },
+        {
+          timeout: 30000
+        }
+      );
+
+      if (!response.data?._id || !response.data?.token) {
+        throw new Error(
+          "The server response was incomplete. Your private-key backups have been generated. Please check whether the account was created before trying again."
+        );
+      }
+
+      // Step 4: Store account and key information after success.
+      storeAccountData(
+        response.data,
+        publicKeys,
+        privateKeys
+      );
 
       alert(
-        "Account created successfully! Your private key has been downloaded. Store it somewhere safe."
+        "Account created successfully. Both private-key backups have been generated. Store them securely."
       );
 
       setIsLogin(true);
@@ -100,13 +319,21 @@ function Register({ setIsLogin }) {
     } catch (error) {
       console.error("Registration error:", error);
 
-      setErrorMessage(
-        error.response?.data?.message || "Registration failed. Please try again."
-      );
+      const message =
+        error.response?.data?.message ||
+        error.message ||
+        "Registration failed. Please try again.";
+
+      setErrorMessage(message);
+
     } finally {
       setLoading(false);
     }
   };
+
+  // =====================================================
+  // UI
+  // =====================================================
 
   return (
     <main className="auth-page">
@@ -199,6 +426,8 @@ function Register({ setIsLogin }) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="new-password"
+                minLength={8}
+                maxLength={128}
                 required
               />
             </div>
@@ -206,10 +435,12 @@ function Register({ setIsLogin }) {
             <div className="register-key-notice">
               <FaKey />
               <div>
-                <strong>Your private key matters</strong>
+                <strong>Your private keys matter</strong>
                 <p>
-                  We'll generate a private key and download a backup
-                  when your account is created. Keep it somewhere safe.
+                  RSA, X25519 and ML-KEM-768 keys are generated
+                  in your browser. Their private portions are
+                  never sent to the server. Two backup files
+                  will be generated. Store them securely.
                 </p>
               </div>
             </div>
@@ -232,14 +463,17 @@ function Register({ setIsLogin }) {
 
           <div className="auth-switch">
             Already have an account?
-            <button type="button" onClick={() => setIsLogin(true)}>
+            <button
+              type="button"
+              onClick={() => setIsLogin(true)}
+            >
               Sign in
             </button>
           </div>
 
           <div className="auth-encryption-note">
             <FaShieldAlt />
-            <span>Your private key is not sent to our server.</span>
+            <span>Your private keys are not sent to our server.</span>
           </div>
         </div>
 

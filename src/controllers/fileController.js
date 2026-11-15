@@ -1,19 +1,282 @@
 
 const fs = require("fs");
 const crypto = require("crypto");
+const mongoose = require("mongoose");
+
 const File = require("../models/fileModel");
 const User = require("../models/userModel");
 
-// ================= UPLOAD =================
-const uploadFile = async (req, res) => {
+// =====================================================
+// CONSTANTS
+// =====================================================
+
+const LEGACY_ALGORITHM = "RSA-OAEP-2048";
+const HYBRID_ALGORITHM = "X25519-ML-KEM-768";
+
+const MAX_FILENAME_LENGTH = 255;
+const MAX_ENVELOPE_FIELD_LENGTH = 16384;
+
+// =====================================================
+// GENERAL HELPERS
+// =====================================================
+
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+const removeUploadedFile = (filePath) => {
+    if (!filePath) return;
+
     try {
-        const { encryptedKey, iv } = req.body;
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+    } catch (error) {
+        console.error("File cleanup error:", error.message);
+    }
+};
+
+const isValidBase64 = (value, minBytes = 1, maxBytes = 16384) => {
+    if (typeof value !== "string" || !value.length) {
+        return false;
+    }
+
+    if (value.length > MAX_ENVELOPE_FIELD_LENGTH) {
+        return false;
+    }
+
+    // Accept standard Base64 with optional padding.
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+        return false;
+    }
+
+    const buffer = Buffer.from(value, "base64");
+
+    // Reject malformed or non-canonical Base64.
+    const normalizedInput = value.replace(/=+$/, "");
+    const normalizedOutput = buffer.toString("base64").replace(/=+$/, "");
+
+    if (normalizedInput !== normalizedOutput) {
+        return false;
+    }
+
+    return buffer.length >= minBytes && buffer.length <= maxBytes;
+};
+
+const isValidFixedBase64 = (value, expectedBytes) => {
+    return isValidBase64(value, expectedBytes, expectedBytes) &&
+        Buffer.from(value, "base64").length === expectedBytes;
+};
+
+const getAuthenticatedUserId = (req) => {
+    return req.user?._id?.toString();
+};
+
+// =====================================================
+// ENVELOPE VALIDATION
+// =====================================================
+
+/*
+    Legacy envelope:
+    {
+        encryptedKey: "..."
+    }
+
+    Hybrid envelope:
+    {
+        envelopeVersion: 2,
+        keyAlgorithm: "X25519-ML-KEM-768",
+        x25519EphemeralPublicKey: "...",
+        mlkemCiphertext: "...",
+        hkdfSalt: "...",
+        wrappingNonce: "...",
+        wrappedKey: "..."
+    }
+*/
+
+const getEnvelopeData = (body = {}) => {
+    const {
+        encryptedKey,
+        envelopeVersion,
+        keyAlgorithm,
+        x25519EphemeralPublicKey,
+        mlkemCiphertext,
+        hkdfSalt,
+        wrappingNonce,
+        wrappedKey
+    } = body;
+
+    const hasLegacyKey = encryptedKey !== undefined &&
+        encryptedKey !== null &&
+        encryptedKey !== "";
+
+    const hasHybridFields = [
+        x25519EphemeralPublicKey,
+        mlkemCiphertext,
+        hkdfSalt,
+        wrappingNonce,
+        wrappedKey
+    ].some((value) => value !== undefined && value !== null && value !== "");
+
+    // Reject ambiguous requests containing both formats.
+    if (hasLegacyKey && hasHybridFields) {
+        return null;
+    }
+
+    // Legacy RSA-OAEP envelope.
+    if (hasLegacyKey) {
+        if (
+            typeof encryptedKey !== "string" ||
+            !isValidBase64(encryptedKey, 128, 1024)
+        ) {
+            return null;
+        }
+
+        return {
+            key: encryptedKey,
+            envelopeVersion: 1,
+            keyAlgorithm: LEGACY_ALGORITHM
+        };
+    }
+
+    // Hybrid X25519 + ML-KEM-768 envelope.
+    if (
+        Number(envelopeVersion) !== 2 ||
+        keyAlgorithm !== HYBRID_ALGORITHM
+    ) {
+        return null;
+    }
+
+    /*
+        Expected encoded values:
+
+        X25519 raw public key: 32 bytes
+        ML-KEM-768 ciphertext: 1088 bytes
+        HKDF salt:             16 to 64 bytes
+        AES-GCM nonce:         12 bytes
+        Wrapped AES-256 key:   48 to 64 bytes
+
+        A 32-byte AES key encrypted with AES-GCM
+        normally produces 48 bytes including the tag.
+    */
+
+    if (!isValidFixedBase64(x25519EphemeralPublicKey, 32)) {
+        return null;
+    }
+
+    if (!isValidFixedBase64(mlkemCiphertext, 1088)) {
+        return null;
+    }
+
+    if (!isValidBase64(hkdfSalt, 16, 64)) {
+        return null;
+    }
+
+    if (!isValidFixedBase64(wrappingNonce, 12)) {
+        return null;
+    }
+
+    if (!isValidBase64(wrappedKey, 48, 64)) {
+        return null;
+    }
+
+    return {
+        key: null,
+        envelopeVersion: 2,
+        keyAlgorithm: HYBRID_ALGORITHM,
+        x25519EphemeralPublicKey,
+        mlkemCiphertext,
+        hkdfSalt,
+        wrappingNonce,
+        wrappedKey
+    };
+};
+
+// =====================================================
+// ENVELOPE SERIALIZATION
+// =====================================================
+
+const serializeEnvelope = (keyObject) => ({
+    encryptedKey: keyObject.key || null,
+    envelopeVersion: keyObject.envelopeVersion || 1,
+    keyAlgorithm: keyObject.keyAlgorithm || LEGACY_ALGORITHM,
+
+    x25519EphemeralPublicKey:
+        keyObject.x25519EphemeralPublicKey || null,
+
+    mlkemCiphertext:
+        keyObject.mlkemCiphertext || null,
+
+    hkdfSalt:
+        keyObject.hkdfSalt || null,
+
+    wrappingNonce:
+        keyObject.wrappingNonce || null,
+
+    wrappedKey:
+        keyObject.wrappedKey || null
+});
+
+// =====================================================
+// FILE INTEGRITY
+// =====================================================
+
+const calculateSHA256 = (buffer) => {
+    return crypto
+        .createHash("sha256")
+        .update(buffer)
+        .digest("hex");
+};
+
+const verifyFileIntegrity = (buffer, expectedHash) => {
+    // Older files without a stored hash remain accessible.
+    if (!expectedHash) {
+        return true;
+    }
+
+    if (
+        typeof expectedHash !== "string" ||
+        !/^[a-f0-9]{64}$/i.test(expectedHash)
+    ) {
+        return false;
+    }
+
+    const actualHash = calculateSHA256(buffer);
+
+    const expected = Buffer.from(expectedHash, "hex");
+    const actual = Buffer.from(actualHash, "hex");
+
+    return crypto.timingSafeEqual(actual, expected);
+};
+
+// =====================================================
+// UPLOAD FILE
+// =====================================================
+
+const uploadFile = async (req, res) => {
+    const uploadedPath = req.file?.path;
+
+    try {
+        const { iv } = req.body;
+
         const encryptionAlgorithm =
             req.body.encryptionAlgorithm || "AES-CBC";
 
-        if (!encryptedKey || !iv) {
+        const envelope = getEnvelopeData(req.body);
+
+        if (!req.file) {
             return res.status(400).json({
-                message: "Missing encryption data"
+                message: "No file uploaded"
+            });
+        }
+
+        if (!iv || typeof iv !== "string") {
+            return res.status(400).json({
+                message: "File encryption IV is required"
+            });
+        }
+
+        if (!envelope) {
+            return res.status(400).json({
+                message: "Missing or invalid encryption envelope"
             });
         }
 
@@ -23,15 +286,24 @@ const uploadFile = async (req, res) => {
             });
         }
 
-        const file = req.file;
-
-        if (!file) {
+        if (
+            !req.file.originalname ||
+            req.file.originalname.length > MAX_FILENAME_LENGTH
+        ) {
             return res.status(400).json({
-                message: "No file uploaded"
+                message: "Invalid filename"
             });
         }
 
-        const user = await User.findById(req.user._id);
+        const userId = getAuthenticatedUserId(req);
+
+        if (!userId) {
+            return res.status(401).json({
+                message: "Authentication required"
+            });
+        }
+
+        const user = await User.findById(userId);
 
         if (!user) {
             return res.status(404).json({
@@ -39,43 +311,79 @@ const uploadFile = async (req, res) => {
             });
         }
 
-        const encryptedBuffer = fs.readFileSync(file.path);
+        const encryptedBuffer = fs.readFileSync(req.file.path);
 
-        const hash = crypto
-            .createHash("sha256")
-            .update(encryptedBuffer)
-            .digest("hex");
+        if (!encryptedBuffer.length) {
+            return res.status(400).json({
+                message: "Uploaded encrypted file is empty"
+            });
+        }
+
+        const hash = calculateSHA256(encryptedBuffer);
 
         const savedFile = await File.create({
-            filename: file.originalname,
-            encryptedPath: file.path,
+            filename: req.file.originalname,
+            encryptedPath: req.file.path,
+
             encryptedKeys: [
                 {
                     user: user._id,
-                    key: encryptedKey
+                    ...envelope
                 }
             ],
+
             iv,
             encryptionAlgorithm,
             hash,
             owner: user._id
         });
 
-        return res.status(200).json(savedFile);
+        return res.status(201).json(savedFile);
 
     } catch (error) {
-        console.error("Upload error:", error);
+        console.error("Upload error:", error.message);
 
         return res.status(500).json({
             message: "Upload failed"
         });
+
+    } finally {
+        // Remove temporary uploads if database saving failed.
+        // Successfully saved files remain on disk.
+        if (uploadedPath) {
+            try {
+                const saved = await File.exists({
+                    encryptedPath: uploadedPath
+                });
+
+                if (!saved) {
+                    removeUploadedFile(uploadedPath);
+                }
+            } catch (cleanupError) {
+                console.error(
+                    "Upload cleanup check failed:",
+                    cleanupError.message
+                );
+            }
+        }
     }
 };
 
-// ================= DOWNLOAD =================
+// =====================================================
+// DOWNLOAD FILE
+// =====================================================
+
 const downloadFile = async (req, res) => {
     try {
-        const file = await File.findById(req.params.id);
+        const fileId = req.params.id;
+
+        if (!isValidObjectId(fileId)) {
+            return res.status(400).json({
+                message: "Invalid file ID"
+            });
+        }
+
+        const file = await File.findById(fileId);
 
         if (!file) {
             return res.status(404).json({
@@ -83,10 +391,10 @@ const downloadFile = async (req, res) => {
             });
         }
 
-        const userId = req.user._id.toString();
+        const userId = getAuthenticatedUserId(req);
 
         const userKeyObj = file.encryptedKeys.find(
-            k => k.user.toString() === userId
+            (item) => item.user.toString() === userId
         );
 
         if (!userKeyObj) {
@@ -103,27 +411,24 @@ const downloadFile = async (req, res) => {
 
         const encryptedBuffer = fs.readFileSync(file.encryptedPath);
 
-        const newHash = crypto
-            .createHash("sha256")
-            .update(encryptedBuffer)
-            .digest("hex");
-
-        if (newHash !== file.hash) {
+        if (!verifyFileIntegrity(encryptedBuffer, file.hash)) {
             return res.status(400).json({
                 message: "File integrity verification failed"
             });
         }
 
-        return res.json({
+        return res.status(200).json({
             encryptedData: encryptedBuffer.toString("base64"),
-            encryptedKey: userKeyObj.key,
+
+            ...serializeEnvelope(userKeyObj),
+
             iv: file.iv,
             encryptionAlgorithm: file.encryptionAlgorithm || "AES-CBC",
             filename: file.filename
         });
 
     } catch (error) {
-        console.error("Download error:", error);
+        console.error("Download error:", error.message);
 
         return res.status(500).json({
             message: "Error downloading file"
@@ -131,14 +436,25 @@ const downloadFile = async (req, res) => {
     }
 };
 
-// ================= SHARE =================
+// =====================================================
+// SHARE FILE
+// =====================================================
+
 const shareFile = async (req, res) => {
     try {
-        const { fileId, encryptedKey, receiverId } = req.body;
+        const { fileId, receiverId } = req.body;
 
-        if (!fileId || !encryptedKey || !receiverId) {
+        const envelope = getEnvelopeData(req.body);
+
+        if (!fileId || !receiverId || !envelope) {
             return res.status(400).json({
-                message: "Missing sharing information"
+                message: "Missing or invalid sharing information"
+            });
+        }
+
+        if (!isValidObjectId(fileId) || !isValidObjectId(receiverId)) {
+            return res.status(400).json({
+                message: "Invalid file or receiver ID"
             });
         }
 
@@ -150,9 +466,11 @@ const shareFile = async (req, res) => {
             });
         }
 
-        if (file.owner.toString() !== req.user._id.toString()) {
+        const currentUserId = getAuthenticatedUserId(req);
+
+        if (file.owner.toString() !== currentUserId) {
             return res.status(403).json({
-                message: "Only owner can share"
+                message: "Only the file owner can share this file"
             });
         }
 
@@ -164,30 +482,47 @@ const shareFile = async (req, res) => {
             });
         }
 
-        if (receiver._id.toString() === req.user._id.toString()) {
+        if (receiver._id.toString() === currentUserId) {
             return res.status(400).json({
                 message: "You cannot share a file with yourself"
             });
         }
 
+        if (
+            envelope.envelopeVersion === 2 &&
+            (!receiver.x25519PublicKey || !receiver.mlkem768PublicKey)
+        ) {
+            return res.status(400).json({
+                message: "Receiver has not registered hybrid public keys"
+            });
+        }
+
+        if (
+            envelope.envelopeVersion === 1 &&
+            !receiver.publicKey
+        ) {
+            return res.status(400).json({
+                message: "Receiver has not registered an RSA public key"
+            });
+        }
+
         const alreadyShared = file.encryptedKeys.some(
-            k => k.user.toString() === receiverId
+            (item) => item.user.toString() === receiverId.toString()
         );
 
         if (alreadyShared) {
-            return res.status(400).json({
+            return res.status(409).json({
                 message: "File is already shared with this user"
             });
         }
 
         file.encryptedKeys.push({
-            user: receiverId,
-            key: encryptedKey
+            user: receiver._id,
+            ...envelope
         });
 
         await file.save();
 
-        // Notify all connected devices of the recipient
         const io = req.app.get("io");
 
         if (io) {
@@ -200,23 +535,34 @@ const shareFile = async (req, res) => {
             );
         }
 
-        return res.json({
-            message: "Shared successfully"
+        return res.status(200).json({
+            message: "File shared successfully"
         });
 
     } catch (error) {
-        console.error("Share error:", error);
+        console.error("Share error:", error.message);
 
         return res.status(500).json({
-            message: "Share failed"
+            message: "File sharing failed"
         });
     }
 };
 
-// ================= DELETE =================
+// =====================================================
+// DELETE FILE
+// =====================================================
+
 const deleteFile = async (req, res) => {
     try {
-        const file = await File.findById(req.params.id);
+        const fileId = req.params.id;
+
+        if (!isValidObjectId(fileId)) {
+            return res.status(400).json({
+                message: "Invalid file ID"
+            });
+        }
+
+        const file = await File.findById(fileId);
 
         if (!file) {
             return res.status(404).json({
@@ -224,24 +570,26 @@ const deleteFile = async (req, res) => {
             });
         }
 
-        if (file.owner.toString() !== req.user._id.toString()) {
+        const currentUserId = getAuthenticatedUserId(req);
+
+        if (file.owner.toString() !== currentUserId) {
             return res.status(403).json({
-                message: "Access denied"
+                message: "Only the file owner can delete this file"
             });
         }
 
-        if (fs.existsSync(file.encryptedPath)) {
-            fs.unlinkSync(file.encryptedPath);
-        }
+        const encryptedPath = file.encryptedPath;
 
         await file.deleteOne();
 
-        return res.json({
+        removeUploadedFile(encryptedPath);
+
+        return res.status(200).json({
             message: "File deleted successfully"
         });
 
     } catch (error) {
-        console.error("Delete error:", error);
+        console.error("Delete error:", error.message);
 
         return res.status(500).json({
             message: "Error deleting file"
@@ -249,21 +597,29 @@ const deleteFile = async (req, res) => {
     }
 };
 
-// ================= REVOKE =================
+// =====================================================
+// REVOKE ACCESS
+// =====================================================
+
 const revokeAccess = async (req, res) => {
     try {
         const { fileId, userId } = req.body;
 
         if (!fileId || !userId) {
             return res.status(400).json({
-                message: "Missing file or user information"
+                message: "File ID and recipient ID are required"
             });
         }
 
-        const currentUserId = req.user._id.toString();
+        if (!isValidObjectId(fileId) || !isValidObjectId(userId)) {
+            return res.status(400).json({
+                message: "Invalid file or recipient ID"
+            });
+        }
+
+        const currentUserId = getAuthenticatedUserId(req);
         const targetUserId = userId.toString();
 
-        // Prevent owner from revoking their own access
         if (targetUserId === currentUserId) {
             return res.status(400).json({
                 message: "Owner cannot revoke their own access"
@@ -278,16 +634,14 @@ const revokeAccess = async (req, res) => {
             });
         }
 
-        // Only the owner can revoke access
         if (file.owner.toString() !== currentUserId) {
             return res.status(403).json({
-                message: "Only owner can revoke access"
+                message: "Only the file owner can revoke access"
             });
         }
 
-        // Check whether recipient currently has access
         const hasAccess = file.encryptedKeys.some(
-            k => k.user.toString() === targetUserId
+            (item) => item.user.toString() === targetUserId
         );
 
         if (!hasAccess) {
@@ -296,14 +650,12 @@ const revokeAccess = async (req, res) => {
             });
         }
 
-        // Remove recipient's encrypted key
         file.encryptedKeys = file.encryptedKeys.filter(
-            k => k.user.toString() !== targetUserId
+            (item) => item.user.toString() !== targetUserId
         );
 
         await file.save();
 
-        // Send real-time notification to all recipient devices
         const io = req.app.get("io");
 
         if (io) {
@@ -316,12 +668,13 @@ const revokeAccess = async (req, res) => {
             );
         }
 
-        return res.json({
-            message: "Access revoked successfully"
+        return res.status(200).json({
+            message: "Access revoked successfully",
+            keyRotationRequired: true
         });
 
     } catch (error) {
-        console.error("Revoke error:", error);
+        console.error("Revoke error:", error.message);
 
         return res.status(500).json({
             message: "Error revoking access"
@@ -329,22 +682,48 @@ const revokeAccess = async (req, res) => {
     }
 };
 
-// ================= GET FILES =================
+// =====================================================
+// GET USER FILES
+// =====================================================
+
 const getFiles = async (req, res) => {
     try {
-        const userId = req.user._id;
+        const userId = getAuthenticatedUserId(req);
 
         const files = await File.find({
             $or: [
                 { owner: userId },
                 { "encryptedKeys.user": userId }
             ]
-        }).populate("encryptedKeys.user", "email name");
+        })
+            .populate("encryptedKeys.user", "email name")
+            .sort({ createdAt: -1 });
 
-        return res.json(files);
+        const filteredFiles = files.map((file) => {
+            const fileObject = file.toObject();
+
+            const isOwner =
+                file.owner.toString() === userId;
+
+            if (!isOwner) {
+                // Recipients receive only their own envelope.
+                fileObject.encryptedKeys =
+                    fileObject.encryptedKeys.filter((item) => {
+                        const envelopeUserId =
+                            item.user?._id?.toString() ||
+                            item.user?.toString();
+
+                        return envelopeUserId === userId;
+                    });
+            }
+
+            return fileObject;
+        });
+
+        return res.status(200).json(filteredFiles);
 
     } catch (error) {
-        console.error("Fetch files error:", error);
+        console.error("Fetch files error:", error.message);
 
         return res.status(500).json({
             message: "Error fetching files"
@@ -352,10 +731,21 @@ const getFiles = async (req, res) => {
     }
 };
 
-// ================= GET FILE KEY =================
+// =====================================================
+// GET FILE KEY
+// =====================================================
+
 const getFileKey = async (req, res) => {
     try {
-        const file = await File.findById(req.params.id);
+        const fileId = req.params.id;
+
+        if (!isValidObjectId(fileId)) {
+            return res.status(400).json({
+                message: "Invalid file ID"
+            });
+        }
+
+        const file = await File.findById(fileId);
 
         if (!file) {
             return res.status(404).json({
@@ -363,10 +753,10 @@ const getFileKey = async (req, res) => {
             });
         }
 
-        const userId = req.user._id.toString();
+        const userId = getAuthenticatedUserId(req);
 
         const userKeyObj = file.encryptedKeys.find(
-            k => k.user.toString() === userId
+            (item) => item.user.toString() === userId
         );
 
         if (!userKeyObj) {
@@ -375,20 +765,24 @@ const getFileKey = async (req, res) => {
             });
         }
 
-        return res.json({
-            encryptedKey: userKeyObj.key,
+        return res.status(200).json({
+            ...serializeEnvelope(userKeyObj),
             iv: file.iv,
             encryptionAlgorithm: file.encryptionAlgorithm || "AES-CBC"
         });
 
     } catch (error) {
-        console.error("Get file key error:", error);
+        console.error("Get file key error:", error.message);
 
         return res.status(500).json({
             message: "Error fetching key"
         });
     }
 };
+
+// =====================================================
+// EXPORTS
+// =====================================================
 
 module.exports = {
     uploadFile,
