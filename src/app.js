@@ -15,76 +15,114 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
+const allowedOrigins = (process.env.CLIENT_URL || "http://localhost:3000")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const corsOptions = {
+    origin(origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+
+        return callback(new Error("Origin not allowed by CORS"));
+    },
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"]
+};
+
 const io = new Server(server, {
-    cors: {
-        origin: process.env.CLIENT_URL || "*",
-        methods: ["GET", "POST"]
-    }
+    cors: corsOptions
 });
 
-// Make Socket.IO available to controllers
 app.set("io", io);
 
-// Database connection
-connectDB();
+app.use(cors(corsOptions));
+app.use(express.json({ limit: "1mb" }));
 
-// Middleware
-app.use(express.json());
-app.use(cors());
-
-// Health check
 app.get("/", (req, res) => {
-    res.status(200).send("Server is running successfully 🚀");
+    res.status(200).json({
+        message: "Nexus Vault API is running",
+        status: "ok"
+    });
 });
 
-// API routes
 app.use("/api/users", userRoutes);
 app.use("/api/files", fileRoutes);
 
-// Authenticate Socket.IO connections
 io.use((socket, next) => {
     try {
-        const token = socket.handshake.auth.token;
+        const token = socket.handshake.auth?.token;
 
         if (!token) {
             return next(new Error("Authentication required"));
         }
 
-        const decoded = jwt.verify(
-            token,
-            process.env.JWT_SECRET
-        );
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
         socket.userId = decoded.id;
-
-        next();
-
-    } catch (error) {
-        next(new Error("Invalid or expired token"));
+        return next();
+    } catch {
+        return next(new Error("Invalid or expired token"));
     }
 });
 
-// Handle authenticated connections
 io.on("connection", (socket) => {
-    const userRoom = `user:${socket.userId}`;
+    socket.join(`user:${socket.userId}`);
 
-    socket.join(userRoom);
-
-    console.log(
-        `Authenticated user connected: ${socket.userId}`
-    );
+    console.log(`Authenticated user connected: ${socket.userId}`);
 
     socket.on("disconnect", () => {
-        console.log(
-            `User disconnected: ${socket.userId}`
-        );
+        console.log(`User disconnected: ${socket.userId}`);
     });
 });
 
-// Start server
+// Central error handler, including Multer upload errors.
+app.use((error, req, res, next) => {
+    if (res.headersSent) {
+        return next(error);
+    }
+
+    if (error.name === "MulterError") {
+        const message = error.code === "LIMIT_FILE_SIZE"
+            ? "File exceeds the maximum upload size."
+            : error.message;
+
+        return res.status(400).json({ message });
+    }
+
+    if (error.message === "Origin not allowed by CORS") {
+        return res.status(403).json({ message: error.message });
+    }
+
+    console.error("Unhandled server error:", error.message);
+
+    return res.status(500).json({
+        message: "An unexpected server error occurred."
+    });
+});
+
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log("Authenticated Socket.IO server is ready 🚀");
+async function startServer() {
+    if (!process.env.MONGO_URI) {
+        throw new Error("MONGO_URI is not configured.");
+    }
+
+    if (!process.env.JWT_SECRET) {
+        throw new Error("JWT_SECRET is not configured.");
+    }
+
+    await connectDB();
+
+    server.listen(PORT, () => {
+        console.log(`Nexus Vault API running on port ${PORT}`);
+        console.log("Authenticated Socket.IO server is ready.");
+    });
+}
+
+startServer().catch((error) => {
+    console.error("Server startup failed:", error.message);
+    process.exit(1);
 });

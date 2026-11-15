@@ -7,18 +7,36 @@ import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import socket from "./socket";
 
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
+
+function clearSession() {
+    [
+        "token",
+        "userId",
+        "publicKey",
+        "privateKey",
+        "x25519PublicKey",
+        "mlkem768PublicKey",
+        "x25519PrivateKey",
+        "mlkem768PrivateKey",
+        "hybridKeyVersion",
+        "hybridKeyCreatedAt",
+        "hybridPrivateKeysAvailable",
+        "rsaPrivateKeyAvailable"
+    ].forEach((key) => localStorage.removeItem(key));
+}
+
 function App() {
     const [isLoggedIn, setIsLoggedIn] = useState(
-        !!localStorage.getItem("token")
+        Boolean(localStorage.getItem("token"))
     );
 
     const [isLogin, setIsLogin] = useState(true);
 
     const [checkingSession, setCheckingSession] = useState(
-        !!localStorage.getItem("token")
+        Boolean(localStorage.getItem("token"))
     );
 
-    // Verify existing login session
     useEffect(() => {
         const verifySession = async () => {
             const token = localStorage.getItem("token");
@@ -30,30 +48,25 @@ function App() {
             }
 
             try {
-                await axios.get("http://localhost:5000/api/files", {
+                await axios.get(`${API_URL}/api/files`, {
                     headers: {
                         Authorization: `Bearer ${token}`
-                    }
+                    },
+                    timeout: 10000
                 });
 
                 setIsLoggedIn(true);
-
             } catch (error) {
                 if (
                     error.response?.status === 401 ||
                     error.response?.status === 403
                 ) {
-                    localStorage.removeItem("token");
-                    localStorage.removeItem("userId");
-                    localStorage.removeItem("publicKey");
-
+                    clearSession();
                     setIsLoggedIn(false);
-
                 } else {
-                    // Preserve session if server is temporarily unavailable
+                    // Keep the session if the API is temporarily unavailable.
                     setIsLoggedIn(true);
                 }
-
             } finally {
                 setCheckingSession(false);
             }
@@ -62,11 +75,8 @@ function App() {
         verifySession();
     }, []);
 
-    // Connect authenticated user to Socket.IO
     useEffect(() => {
-        if (checkingSession) {
-            return;
-        }
+        if (checkingSession) return;
 
         if (!isLoggedIn) {
             socket.disconnect();
@@ -88,7 +98,6 @@ function App() {
         };
     }, [isLoggedIn, checkingSession]);
 
-    // Loading screen
     if (checkingSession) {
         return (
             <div className="app-loading">
@@ -98,12 +107,10 @@ function App() {
         );
     }
 
-    // Dashboard
     if (isLoggedIn) {
         return <Dashboard />;
     }
 
-    // Login / Register
     return isLogin ? (
         <Login
             setIsLoggedIn={setIsLoggedIn}
